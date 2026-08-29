@@ -14,7 +14,7 @@ Generated from the self-hosting production acceptance contract.
 
 - Stronger candidate isolation: source SHA, UI runtime hash, agent runtime hash, dependency preflight, handshake identity, listener ownership, exact PID cleanup. Synthetic candidate isolation is implemented and proved.
 - LaunchServices command contract for `/usr/bin/open -n Candidate.app` with candidate identity validation is implemented; disposable macOS app launch/PID/identity cleanup proof is available via `npm run test:macos-launchservices` and was verified locally.
-- Synthetic JARVIS acceptance harness covering startup, turns, structured views, clock/capability truth, empty responses, Guest Mode, interruptions, speech normalization, crash health, and runtime identity. Initial synthetic harness is implemented and fails back into repair on deterministic acceptance failures.
+- Synthetic JARVIS acceptance harness covering startup, turns, structured views, clock/capability truth, empty responses, Guest Mode, interruptions, speech normalization, crash health, and runtime identity. Adapter-based product acceptance harness is implemented and fails back into repair on deterministic acceptance failures.
 - Human rejection loop: capture feedback, create bounded repair mission, rebuild candidate, return a new human-check card. Initial feedback-to-repair proof is implemented.
 
 ## P2

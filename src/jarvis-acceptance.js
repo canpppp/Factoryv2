@@ -1,5 +1,7 @@
 "use strict";
 
+const productAcceptance = require("./product-acceptance");
+
 const CHECKS = Object.freeze([
   "startup",
   "restart",
@@ -15,7 +17,13 @@ const CHECKS = Object.freeze([
   "runtimeIdentity"
 ]);
 
-function runSyntheticAcceptance(candidateManifest, fixture = {}) {
+async function runSyntheticAcceptance(candidateManifest, fixture = {}) {
+  if (fixture && fixture.__runtimeHarness) {
+    return productAcceptance.runProductAcceptance(
+      productAcceptance.fakeJarvisRuntime(fixture.overrides || {}),
+      { identity: candidateManifest.identity }
+    );
+  }
   const results = CHECKS.map((check) => {
     const value = fixture[check];
     const passed = value === true || (check === "runtimeIdentity" && value === candidateManifest.identity);

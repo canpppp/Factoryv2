@@ -178,7 +178,7 @@ function createController({ root, adapter }) {
     else setMissionState(mission, "accepting");
   }
 
-  function accept(mission) {
+  async function accept(mission) {
     const commands = mission.acceptanceCommands && mission.acceptanceCommands.length
       ? mission.acceptanceCommands
       : mission.verifyCommands;
@@ -192,7 +192,7 @@ function createController({ root, adapter }) {
     emit({ type: "acceptance.finished", missionId: mission.id, results });
     if (results.some((r) => !r.passed)) return queueRepair(mission, results.map((r) => `acceptance failed: ${r.command}`));
     if (mission.syntheticJarvisAcceptance) {
-      const synthetic = jarvisAcceptance.runSyntheticAcceptance(
+      const synthetic = await jarvisAcceptance.runSyntheticAcceptance(
         { identity: mission.candidate && mission.candidate.verified && mission.candidate.verified.identity || (mission.candidateSpec && mission.candidateSpec.identity) || mission.id },
         mission.syntheticJarvisAcceptance
       );
@@ -248,7 +248,7 @@ function createController({ root, adapter }) {
       else if (mission.state === "reviewing") await review(mission);
       else if (mission.state === "integrating") integrate(mission);
       else if (mission.state === "candidate") createCandidate(mission);
-      else if (mission.state === "accepting") accept(mission);
+      else if (mission.state === "accepting") await accept(mission);
       journal.writeSnapshot(root);
       return { progressed: true, summary: `advanced ${mission.id}` };
     } catch (e) {

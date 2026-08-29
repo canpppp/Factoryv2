@@ -13,7 +13,7 @@ const ITEMS = Object.freeze([
   ["J", "candidate system", "proved"],
   ["K", "dependency closure", "proved"],
   ["L", "LaunchServices proof", "proved"],
-  ["M", "automated product acceptance", "partial"],
+  ["M", "automated product acceptance", "proved"],
   ["N", "READY_FOR_HUMAN_CHECK", "proved"],
   ["O", "human rejection loop", "proved"],
   ["P", "Ship-it release train", "proved"],
