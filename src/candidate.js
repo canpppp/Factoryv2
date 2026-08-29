@@ -5,6 +5,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { spawn } = require("node:child_process");
 const { spawnSync } = require("node:child_process");
+const launchservices = require("./launchservices");
 
 function hash(value) {
   return crypto.createHash("sha256").update(JSON.stringify(value)).digest("hex");
@@ -24,6 +25,7 @@ function createCandidate(root, mission) {
     runtimeHash: hash({ uiRuntime: spec.uiRuntime || "not-required", agentRuntime: spec.agentRuntime || "not-required" }),
     preflight: preflightDependencies(mission.worktree, spec.dependencies || []),
     pairing: verifyPairing(spec),
+    launchServices: launchservices.verifySpec(spec.launchServices || {}),
     launch: spec.launch || null,
     createdAt: new Date().toISOString()
   };
@@ -67,6 +69,7 @@ function launchCandidate(candidate) {
   if (!candidate.launch) return { launched: false, reason: "no-launch-required" };
   if (!candidate.preflight.ok) return { launched: false, reason: "dependency-preflight-failed", missing: candidate.preflight.missing };
   if (!candidate.pairing.ok) return { launched: false, reason: candidate.pairing.reason };
+  if (!candidate.launchServices.ok) return { launched: false, reason: candidate.launchServices.reason };
   const child = spawn(candidate.launch.command, candidate.launch.args || [], {
     cwd: candidate.worktree,
     stdio: "ignore",
@@ -78,6 +81,7 @@ function launchCandidate(candidate) {
 function verifyLaunch({ candidate, launch }) {
   if (!candidate.preflight.ok) return { ok: false, reason: "dependency-preflight-failed", missing: candidate.preflight.missing };
   if (!candidate.pairing.ok) return { ok: false, reason: candidate.pairing.reason, expected: candidate.pairing.expected, actual: candidate.pairing.actual };
+  if (!candidate.launchServices.ok) return { ok: false, reason: candidate.launchServices.reason, expected: candidate.launchServices.expected, actual: candidate.launchServices.actual };
   if (!launch.launched) return { ok: true, skipped: true, reason: launch.reason };
   try {
     process.kill(launch.pid, 0);
