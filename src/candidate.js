@@ -6,6 +6,7 @@ const path = require("node:path");
 const { spawn } = require("node:child_process");
 const { spawnSync } = require("node:child_process");
 const launchservices = require("./launchservices");
+const verifier = require("./candidate-verifier");
 
 function hash(value) {
   return crypto.createHash("sha256").update(JSON.stringify(value)).digest("hex");
@@ -18,17 +19,22 @@ function createCandidate(root, mission) {
     missionId: mission.id,
     commit: mission.commit,
     worktree: mission.worktree,
+    source: verifier.sourceIdentity(mission.worktree),
     identity: spec.identity || `FactoryV2 Candidate ${mission.id}`,
     uiRuntime: spec.uiRuntime || "not-required",
     agentRuntime: spec.agentRuntime || "not-required",
     dependencyClosure: hash(spec.dependencies || []),
+    runtime: verifier.runtimeIdentity(spec, mission.worktree),
     runtimeHash: hash({ uiRuntime: spec.uiRuntime || "not-required", agentRuntime: spec.agentRuntime || "not-required" }),
     preflight: preflightDependencies(mission.worktree, spec.dependencies || []),
     pairing: verifyPairing(spec),
+    listenerOwnership: verifier.listenerOwnership(spec),
+    mainEquivalence: verifier.candidateMainEquivalence(mission),
     launchServices: launchservices.verifySpec(spec.launchServices || {}),
     launch: spec.launch || null,
     createdAt: new Date().toISOString()
   };
+  manifest.verification = verifier.verifyManifest(manifest, mission);
   const dir = path.join(root, "candidates", manifest.candidateId);
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, "manifest.json"), JSON.stringify(manifest, null, 2));
@@ -69,6 +75,8 @@ function launchCandidate(candidate) {
   if (!candidate.launch) return { launched: false, reason: "no-launch-required" };
   if (!candidate.preflight.ok) return { launched: false, reason: "dependency-preflight-failed", missing: candidate.preflight.missing };
   if (!candidate.pairing.ok) return { launched: false, reason: candidate.pairing.reason };
+  if (!candidate.listenerOwnership.ok) return { launched: false, reason: candidate.listenerOwnership.reason };
+  if (!candidate.mainEquivalence.ok) return { launched: false, reason: candidate.mainEquivalence.reason };
   if (!candidate.launchServices.ok) return { launched: false, reason: candidate.launchServices.reason };
   const child = spawn(candidate.launch.command, candidate.launch.args || [], {
     cwd: candidate.worktree,
@@ -81,6 +89,8 @@ function launchCandidate(candidate) {
 function verifyLaunch({ candidate, launch }) {
   if (!candidate.preflight.ok) return { ok: false, reason: "dependency-preflight-failed", missing: candidate.preflight.missing };
   if (!candidate.pairing.ok) return { ok: false, reason: candidate.pairing.reason, expected: candidate.pairing.expected, actual: candidate.pairing.actual };
+  if (!candidate.listenerOwnership.ok) return { ok: false, reason: candidate.listenerOwnership.reason, expected: candidate.listenerOwnership.expected, actual: candidate.listenerOwnership.actual };
+  if (!candidate.mainEquivalence.ok) return { ok: false, reason: candidate.mainEquivalence.reason, candidateSha: candidate.mainEquivalence.candidateSha, mainSha: candidate.mainEquivalence.mainSha };
   if (!candidate.launchServices.ok) return { ok: false, reason: candidate.launchServices.reason, expected: candidate.launchServices.expected, actual: candidate.launchServices.actual };
   if (!launch.launched) return { ok: true, skipped: true, reason: launch.reason };
   try {

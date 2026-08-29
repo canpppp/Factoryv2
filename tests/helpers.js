@@ -41,6 +41,16 @@ function makeBugRepo() {
   return dir;
 }
 
+function makeRuntimeRepo() {
+  const dir = makeBugRepo();
+  fs.mkdirSync(path.join(dir, "runtime"), { recursive: true });
+  fs.writeFileSync(path.join(dir, "runtime/ui.js"), "module.exports = 'candidate-ui';\n");
+  fs.writeFileSync(path.join(dir, "runtime/agent.js"), "module.exports = 'candidate-agent';\n");
+  git(dir, ["add", "-A"]);
+  git(dir, ["commit", "-q", "-m", "add candidate runtimes"]);
+  return dir;
+}
+
 function cloneRepo(source) {
   const dir = tmp("factoryv2-jarvis-");
   fs.rmSync(dir, { recursive: true, force: true });
@@ -69,4 +79,4 @@ function makeJarvisDocsTestRepo(source) {
   return dir;
 }
 
-module.exports = { tmp, cleanup, git, makeBugRepo, cloneRepo, makeJarvisDocsTestRepo };
+module.exports = { tmp, cleanup, git, makeBugRepo, makeRuntimeRepo, cloneRepo, makeJarvisDocsTestRepo };

@@ -57,6 +57,45 @@ async function main() {
   assert.match(mismatch.blocker, /agent-runtime-mismatch/);
   assert.strictEqual(mismatch.candidate.launch.launched, false);
 
+  const listenerMismatch = await runCandidate({
+    identity: "Candidate UI",
+    handshakeIdentity: "Candidate UI",
+    uiRuntime: "candidate-ui",
+    agentRuntime: "candidate-agent",
+    expectedAgentRuntime: "candidate-agent",
+    dependencies: ["node"],
+    listener: { expectedOwner: "candidate-runtime", actualOwner: "stable-runtime" },
+    launch: { command: process.execPath, args: ["-e", "setTimeout(()=>{}, 30000)"] }
+  });
+  assert.strictEqual(listenerMismatch.state, "blocked");
+  assert.match(listenerMismatch.blocker, /listener-owner-mismatch/);
+
+  const runtimeRoot = H.tmp("factoryv2-runtime-root-");
+  const runtimeRepo = H.makeRuntimeRepo();
+  const candidate = require("../src/candidate");
+  const cand = candidate.createCandidate(runtimeRoot, {
+    id: "mission-runtime",
+    repo: runtimeRepo,
+    worktree: runtimeRepo,
+    commit: H.git(runtimeRepo, ["rev-parse", "HEAD"]),
+    candidateSpec: {
+      identity: "Runtime Candidate",
+      handshakeIdentity: "Runtime Candidate",
+      uiRuntime: "candidate-ui",
+      agentRuntime: "candidate-agent",
+      expectedUiRuntime: "candidate-ui",
+      expectedAgentRuntime: "candidate-agent",
+      uiRuntimePath: "runtime/ui.js",
+      agentRuntimePath: "runtime/agent.js",
+      dependencies: ["node"],
+      listener: { expectedOwner: "candidate-runtime", actualOwner: "candidate-runtime" }
+    }
+  });
+  assert.strictEqual(cand.verification.ok, true);
+  assert.strictEqual(cand.source.headSha, H.git(runtimeRepo, ["rev-parse", "HEAD"]));
+  assert.ok(cand.runtime.uiRuntimeHash);
+  assert.ok(cand.runtime.agentRuntimeHash);
+
   console.log("Candidate isolation proof passed");
 }
 

@@ -10,7 +10,7 @@ const ITEMS = Object.freeze([
   ["G", "repair budgets", "proved"],
   ["H", "administrative self-management", "proved"],
   ["I", "protected architecture boundary", "proved"],
-  ["J", "candidate system", "partial"],
+  ["J", "candidate system", "proved"],
   ["K", "dependency closure", "proved"],
   ["L", "LaunchServices proof", "partial"],
   ["M", "automated product acceptance", "partial"],
