@@ -9,6 +9,7 @@ const git = require("./git");
 const candidate = require("./candidate");
 const releaseTrain = require("./release-train");
 const envelope = require("./envelope");
+const jarvisAcceptance = require("./jarvis-acceptance");
 
 const MAX_REPAIRS = 2;
 
@@ -190,6 +191,21 @@ function createController({ root, adapter }) {
     setField(mission, "acceptance", results);
     emit({ type: "acceptance.finished", missionId: mission.id, results });
     if (results.some((r) => !r.passed)) return queueRepair(mission, results.map((r) => `acceptance failed: ${r.command}`));
+    if (mission.syntheticJarvisAcceptance) {
+      const synthetic = jarvisAcceptance.runSyntheticAcceptance(
+        { identity: mission.candidate && mission.candidate.verified && mission.candidate.verified.identity || (mission.candidateSpec && mission.candidateSpec.identity) || mission.id },
+        mission.syntheticJarvisAcceptance
+      );
+      emit({ type: "jarvis.acceptance.finished", missionId: mission.id, result: synthetic });
+      if (!synthetic.ok) {
+        setField(mission, "acceptance", results.concat(synthetic.results.map((r) => ({
+          command: `synthetic:${r.check}`,
+          passed: r.passed,
+          reason: r.detail
+        }))));
+        return queueRepair(mission, synthetic.results.filter((r) => !r.passed).map((r) => `synthetic JARVIS acceptance failed: ${r.check}`));
+      }
+    }
     const rel = mission.releasePolicy
       ? releaseTrain.release(mission, { shipIt: !!mission.releasePolicy.shipIt })
       : { ok: true, released: false, reason: "release-not-requested" };
