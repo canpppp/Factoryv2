@@ -3,6 +3,7 @@
 const policy = require("./policy");
 const git = require("./git");
 const { spawnSync } = require("node:child_process");
+const candidateVerifier = require("./candidate-verifier");
 
 function integrate(mission) {
   return {
@@ -17,11 +18,22 @@ function release(mission, { shipIt = false } = {}) {
   const trustDomain = mission.trustDomain || "jarvis";
   const allowed = policy.releaseAllowed({ trustDomain, shipIt });
   if (!allowed.ok) return { ok: false, released: false, reason: allowed.reason };
+  if (mission.releasePolicy && mission.releasePolicy.requireMainEquivalence && !(mission.releasePolicy && mission.releasePolicy.mergeToMain)) {
+    const equivalence = candidateVerifier.candidateMainEquivalence(mission);
+    if (!equivalence.ok) return { ok: false, released: false, mergedToMain: false, reason: equivalence.reason, equivalence };
+  }
   if (mission.releasePolicy && mission.releasePolicy.mergeToMain) {
     git.git(mission.repo, ["checkout", "-q", "main"]);
     git.git(mission.repo, ["merge", "--no-ff", "-m", `FactoryV2 release ${mission.id}`, mission.branch]);
+    const equivalence = candidateVerifier.candidateMainEquivalence({
+      ...mission,
+      releasePolicy: { ...mission.releasePolicy, requireMainEquivalence: true }
+    });
+    if (!equivalence.ok) {
+      return { ok: false, released: false, mergedToMain: true, reason: equivalence.reason, equivalence };
+    }
     const steps = runReleaseSteps(mission);
-    return { ok: steps.ok, released: steps.ok, mergedToMain: true, reason: steps.reason || allowed.reason, steps };
+    return { ok: steps.ok, released: steps.ok, mergedToMain: true, reason: steps.reason || allowed.reason, equivalence, steps };
   }
   const steps = runReleaseSteps(mission);
   return { ok: steps.ok, released: steps.ok, mergedToMain: false, reason: steps.reason || allowed.reason, steps };

@@ -16,7 +16,7 @@ const ITEMS = Object.freeze([
   ["M", "automated product acceptance", "partial"],
   ["N", "READY_FOR_HUMAN_CHECK", "proved"],
   ["O", "human rejection loop", "proved"],
-  ["P", "Ship-it release train", "partial"],
+  ["P", "Ship-it release train", "proved"],
   ["Q", "long autonomous endurance", "proved"]
 ]);
 

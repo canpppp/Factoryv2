@@ -84,11 +84,15 @@ function candidateMainEquivalence(mission) {
   }
   const candidateSha = mission.commit || gitSha(mission.worktree, "HEAD");
   const mainSha = gitSha(mission.repo, "main");
+  const candidateTree = gitSha(mission.worktree, `${candidateSha}^{tree}`);
+  const mainTree = gitSha(mission.repo, "main^{tree}");
   return {
-    ok: candidateSha === mainSha,
+    ok: candidateTree === mainTree,
     candidateSha,
     mainSha,
-    reason: candidateSha === mainSha ? null : "candidate-main-mismatch"
+    candidateTree,
+    mainTree,
+    reason: candidateTree === mainTree ? null : "candidate-main-mismatch"
   };
 }
 

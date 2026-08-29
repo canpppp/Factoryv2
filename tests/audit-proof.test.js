@@ -17,7 +17,7 @@ function main() {
   const r = spawnSync(process.execPath, [path.join(__dirname, "../bin/factoryv2.js"), "--root", root, "audit"], { encoding: "utf8" });
   assert.strictEqual(r.status, 0);
   assert.match(r.stdout, /A\. PROVED one-command goal execution/);
-  assert.match(r.stdout, /P\. PARTIAL Ship-it release train/);
+  assert.match(r.stdout, /P\. PROVED Ship-it release train/);
 
   console.log("Production audit proof passed");
 }

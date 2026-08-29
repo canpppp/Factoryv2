@@ -5,9 +5,11 @@ const fs = require("node:fs");
 const { createController } = require("../src/controller");
 const { fakeAdapter } = require("../src/fake-agent");
 const journal = require("../src/journal");
+const releaseTrain = require("../src/release-train");
 const H = require("./helpers");
 
 async function main() {
+  proveEquivalenceMismatchBlocks();
   const root = H.tmp("factoryv2-release-train-");
   const repo = H.makeBugRepo();
   const approve = JSON.stringify({ verdict: "approve", findings: [], summary: "ok" });
@@ -44,10 +46,29 @@ async function main() {
   assert.strictEqual(mission.state, "blocked");
   assert.match(mission.blocker, /smokeCommand-failed/);
   assert.strictEqual(mission.release.steps.rolledBack, true);
+  assert.strictEqual(mission.release.equivalence.ok, true);
   assert.ok(fs.existsSync(`${repo}/rollback.txt`), "rollback command did not run");
   assert.match(H.git(repo, ["show", "main:src/add.js"]), /a \+ b/, "ship-it release did not merge approved state");
 
   console.log("Release train proof passed");
+}
+
+function proveEquivalenceMismatchBlocks() {
+  const repo = H.makeBugRepo();
+  const original = H.git(repo, ["rev-parse", "HEAD"]);
+  fs.writeFileSync(`${repo}/README.md`, "main drift\n");
+  H.git(repo, ["add", "-A"]);
+  H.git(repo, ["commit", "-q", "-m", "main drift"]);
+  const result = releaseTrain.release({
+    id: "mission-drift",
+    repo,
+    worktree: repo,
+    commit: original,
+    trustDomain: "jarvis",
+    releasePolicy: { requireMainEquivalence: true }
+  }, { shipIt: true });
+  assert.strictEqual(result.ok, false);
+  assert.match(result.reason, /candidate-main-mismatch/);
 }
 
 main().catch((e) => {
