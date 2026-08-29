@@ -48,9 +48,14 @@ function createController({ root, adapter }) {
   }
 
   function architect(goal) {
-    const missionId = `${goal.id.replace(/^goal-/, "mission-")}`;
-    const branch = `factory/${missionId.slice(0, 64)}`;
-    const mission = {
+    emit({ type: "architect.started", goalId: goal.id });
+    const templates = Array.isArray(goal.missionOverrides.missions) && goal.missionOverrides.missions.length
+      ? goal.missionOverrides.missions
+      : [goal.missionOverrides || {}];
+    templates.forEach((template, index) => {
+      const missionId = template.id || `${goal.id.replace(/^goal-/, "mission-")}-${index + 1}`;
+      const branch = template.branch || `factory/${missionId.slice(0, 64)}`;
+      const mission = {
       goalId: goal.id,
       title: "Factory-generated mission",
       repo: goal.repo,
@@ -63,26 +68,30 @@ function createController({ root, adapter }) {
       maxRepairRounds: MAX_REPAIRS,
       attempts: 0,
       repairRounds: 0,
-      ...(goal.missionOverrides || {})
-    };
-    emit({ type: "architect.started", goalId: goal.id });
-    emit({ type: "mission.created", goalId: goal.id, missionId, mission });
+      replacements: 0,
+      ...template
+      };
+      delete mission.missions;
+      emit({ type: "mission.created", goalId: goal.id, missionId, mission });
+    });
     emit({ type: "goal.state", goalId: goal.id, from: goal.state, to: "running" });
-    return missionId;
   }
 
   async function build(mission) {
     const worktree = mission.worktree || git.ensureWorktree(root, mission);
     if (!mission.worktree) setField(mission, "worktree", worktree);
     setMissionState(mission, "building");
-    const worker = mission.workerThreadId
-      ? adapter.resumeThread(mission.workerThreadId, { role: "worker", cwd: worktree, readOnly: false })
-      : adapter.startThread({ role: "worker", cwd: worktree, readOnly: false });
-    await worker.run(workerPrompt(mission), {
+    const worker = startOrResumeWorker(mission, worktree);
+    const result = await worker.run(workerPrompt(mission), {
       onThreadId: (id) => {
         if (id && id !== mission.workerThreadId) setField(mission, "workerThreadId", id);
       }
     });
+    if (result.finalResponse && /MALFORMED_WORKER_RESPONSE/.test(result.finalResponse)) {
+      const e = new Error("malformed worker response");
+      e.code = "MALFORMED_WORKER_RESPONSE";
+      throw e;
+    }
     setField(mission, "attempts", (mission.attempts || 0) + 1);
     const c = git.commitAll(worktree, `${mission.title}\n\nMission: ${mission.id}`);
     if (!c.ok) {
@@ -91,6 +100,21 @@ function createController({ root, adapter }) {
     }
     setField(mission, "commit", c.sha);
     setMissionState(mission, "verifying");
+  }
+
+  function startOrResumeWorker(mission, worktree) {
+    if (!mission.workerThreadId) return adapter.startThread({ role: "worker", cwd: worktree, readOnly: false });
+    try {
+      return adapter.resumeThread(mission.workerThreadId, { role: "worker", cwd: worktree, readOnly: false });
+    } catch (e) {
+      if (e.code !== "THREAD_NOT_FOUND") throw e;
+      const oldThreadId = mission.workerThreadId;
+      const next = (mission.replacements || 0) + 1;
+      setField(mission, "replacements", next);
+      emit({ type: "worker.replaced", missionId: mission.id, oldThreadId, reason: e.code });
+      setField(mission, "workerThreadId", null);
+      return adapter.startThread({ role: "worker", cwd: worktree, readOnly: false, handoffFrom: oldThreadId });
+    }
   }
 
   function verify(mission) {
@@ -200,7 +224,7 @@ function createController({ root, adapter }) {
       return { progressed: true, summary: "architected goal" };
     }
     state = journal.load(root);
-    const mission = [...state.missions.values()].find((m) => ["queued", "building", "repair", "verifying", "reviewing", "integrating", "candidate", "accepting"].includes(m.state));
+    const mission = [...state.missions.values()].find((m) => isRunnable(m, state.missions));
     if (!mission) return { progressed: false, summary: "idle" };
     try {
       if (["queued", "building", "repair"].includes(mission.state)) await build(mission);
@@ -217,12 +241,21 @@ function createController({ root, adapter }) {
         journal.writeSnapshot(root);
         return { progressed: true, interrupted: true, summary: `interrupted ${mission.id}; restart will resume` };
       }
+      if (["THREAD_NOT_FOUND", "TIMEOUT", "MALFORMED_WORKER_RESPONSE"].includes(e.code)) {
+        setField(mission, "replacements", (mission.replacements || 0) + 1);
+        emit({ type: "worker.replaced", missionId: mission.id, oldThreadId: mission.workerThreadId, reason: e.code });
+        setField(mission, "workerThreadId", null);
+        setMissionState(mission, "repair");
+        return { progressed: true, summary: `replaced worker for ${mission.id}: ${e.code}` };
+      }
       setMissionState(mission, "blocked", { blocker: e.message });
       return { progressed: true, summary: `blocked ${mission.id}: ${e.message}` };
     }
   }
 
   async function run({ maxSteps = 100 } = {}) {
+    const paused = path.join(journal.paths(root).root, "PAUSED");
+    if (require("node:fs").existsSync(paused)) return { ok: true, summary: "paused" };
     return lease.withLease(root, async () => {
       let summary = "idle";
       for (let i = 0; i < maxSteps; i++) {
@@ -235,6 +268,16 @@ function createController({ root, adapter }) {
   }
 
   return { enqueueGoal, run, step };
+}
+
+function isRunnable(mission, missions) {
+  const active = ["queued", "building", "repair", "verifying", "reviewing", "integrating", "candidate", "accepting"];
+  if (!active.includes(mission.state)) return false;
+  for (const depId of mission.dependsOn || []) {
+    const dep = missions.get(depId);
+    if (!dep || dep.state !== "ready_for_human_check") return false;
+  }
+  return true;
 }
 
 function workerPrompt(mission) {

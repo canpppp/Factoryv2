@@ -3,6 +3,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const os = require("node:os");
+const report = require("./report");
 
 function paths(root) {
   const r = path.resolve(root || process.env.FACTORYV2_HOME || path.join(os.homedir(), ".factoryv2"));
@@ -73,7 +74,7 @@ function materialize(events) {
     });
     if (e.type === "mission.field") {
       const m = missions.get(e.missionId);
-      const allowed = ["workerThreadId", "reviewerThreadId", "worktree", "attempts", "repairRounds", "lastFindings", "lastGateResults", "commit", "integration", "candidate", "acceptance", "release"];
+      const allowed = ["workerThreadId", "reviewerThreadId", "worktree", "attempts", "repairRounds", "lastFindings", "lastGateResults", "commit", "integration", "candidate", "acceptance", "release", "replacements"];
       if (m && allowed.includes(e.field)) m[e.field] = e.value;
     }
     if (e.type === "receipt") receipts.push(e);
@@ -111,11 +112,17 @@ function eventsFor(state, missionId) {
 function renderStatus(state) {
   if (!state.ok) return `BLOCKED ${state.reason}`;
   const lines = [];
-  for (const g of state.goals.values()) lines.push(`GOAL ${g.state} ${g.id} ${g.text}`);
+  for (const g of state.goals.values()) lines.push(`GOAL ${goalHumanStatus(g)} ${g.id} ${g.text}`);
   for (const m of state.missions.values()) {
-    lines.push(`MISSION ${m.state} ${m.id} worker=${m.workerThreadId || "-"} reviewer=${m.reviewerThreadId || "-"} repairs=${m.repairRounds || 0}`);
+    lines.push(`MISSION ${report.humanStatus(m)} ${m.id}`);
   }
   return lines.join("\n") || "no goals";
 }
 
-module.exports = { paths, ensure, append, read, materialize, load, writeSnapshot, eventsFor, renderStatus };
+function goalHumanStatus(goal) {
+  if (goal.state === "blocked") return "HUMAN_DECISION_REQUIRED";
+  if (goal.state === "queued" || goal.state === "running") return "WORKING";
+  return String(goal.state || "WORKING").toUpperCase();
+}
+
+module.exports = { paths, ensure, append, read, materialize, load, writeSnapshot, eventsFor, renderStatus, goalHumanStatus };

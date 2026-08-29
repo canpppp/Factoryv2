@@ -18,3 +18,13 @@ npm test
 ```
 
 The proof uses real temporary git repositories and deterministic fake agents. It demonstrates a controlled bug, verifier failure handling, independent reviewer rejection, same-worker repair, Factory restart/resume, and no merge to main.
+
+## Production-hardening proofs
+
+The current suite also proves:
+
+- one Goal Envelope can produce multiple dependent missions;
+- worker loss, malformed worker output, and worker timeout trigger controller-owned replacement;
+- reports derive from the journal and cannot be forced to summarize failed gates as passing;
+- protected authority goals surface as `HUMAN_DECISION_REQUIRED`;
+- compact operator commands exist for status, inspection, pause/resume, decisions, human acceptance/rejection, candidate lookup, and ship-it recording.

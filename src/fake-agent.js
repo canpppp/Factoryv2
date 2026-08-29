@@ -41,6 +41,12 @@ function fakeAdapter({ scripts = {}, defaultScript = [] } = {}) {
             e.code = "INTERRUPTED";
             throw e;
           }
+          if (step.type === "timeout") {
+            rec.turns.push({ input, timeout: true });
+            const e = new Error(step.message || "agent timeout");
+            e.code = "TIMEOUT";
+            throw e;
+          }
         }
         rec.turns.push({ input, finalResponse });
         return { threadId: id, finalResponse };
