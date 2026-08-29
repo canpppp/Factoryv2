@@ -38,4 +38,11 @@ function protectedImpact(goalText) {
   return { ok: hits.length === 0, classes: hits };
 }
 
-module.exports = { PROTECTED_AUTHORITY_CLASSES, FORBIDDEN_COMMANDS, commandAllowed, protectedImpact };
+function releaseAllowed({ trustDomain, shipIt = false }) {
+  if (trustDomain === "factoryv2") return { ok: true, reason: "factoryv2-self-authorized" };
+  if (trustDomain === "jarvis" && shipIt) return { ok: true, reason: "human-release-gate" };
+  if (trustDomain === "jarvis") return { ok: false, reason: "jarvis-release-needs-human-ship-it" };
+  return { ok: false, reason: "unknown-trust-domain" };
+}
+
+module.exports = { PROTECTED_AUTHORITY_CLASSES, FORBIDDEN_COMMANDS, commandAllowed, protectedImpact, releaseAllowed };

@@ -6,6 +6,9 @@ const journal = require("./journal");
 const lease = require("./lease");
 const policy = require("./policy");
 const git = require("./git");
+const candidate = require("./candidate");
+const releaseTrain = require("./release-train");
+const envelope = require("./envelope");
 
 const MAX_REPAIRS = 2;
 
@@ -24,8 +27,16 @@ function createController({ root, adapter }) {
   function enqueueGoal({ goal, repo, missionOverrides = {} }) {
     const impact = policy.protectedImpact(goal);
     const id = `goal-${Date.now()}-${slug(goal)}`;
-    emit({ type: "goal.enqueued", goalId: id, goal: { text: goal, repo, missionOverrides, protectedClasses: impact.classes } });
-    if (!impact.ok) emit({ type: "goal.state", goalId: id, from: "queued", to: "blocked", blocker: `protected classes: ${impact.classes.join(", ")}` });
+    const env = envelope.createEnvelope({
+      goal,
+      repo,
+      trustDomain: missionOverrides.trustDomain || "jarvis",
+      allowedAuthorityClasses: missionOverrides.allowedAuthorityClasses || [],
+      protectedClasses: impact.classes
+    });
+    const envCheck = envelope.validateEnvelope(env);
+    emit({ type: "goal.enqueued", goalId: id, goal: { text: goal, repo, envelope: env, missionOverrides, protectedClasses: impact.classes } });
+    if (!envCheck.ok) emit({ type: "goal.state", goalId: id, from: "queued", to: "blocked", blocker: `protected classes: ${envCheck.denied.join(", ")}` });
     return { id, text: goal, repo };
   }
 
@@ -39,6 +50,9 @@ function createController({ root, adapter }) {
       branch,
       ownedFiles: ["src/**", "README.md", "docs/**", "tests/**"],
       verifyCommands: ["npm test"],
+      acceptanceCommands: [],
+      trustDomain: (goal.envelope && goal.envelope.trustDomain) || "jarvis",
+      envelope: goal.envelope,
       maxRepairRounds: MAX_REPAIRS,
       attempts: 0,
       repairRounds: 0,
@@ -104,6 +118,56 @@ function createController({ root, adapter }) {
       return queueRepair(mission, ["reviewer was not independent"]);
     }
     if (verdict.verdict !== "approve") return queueRepair(mission, verdict.findings);
+    setMissionState(mission, "integrating");
+  }
+
+  function integrate(mission) {
+    const result = releaseTrain.integrate(mission);
+    setField(mission, "integration", result);
+    emit({ type: "integration.finished", missionId: mission.id, result });
+    setMissionState(mission, mission.candidateSpec ? "candidate" : "accepting");
+  }
+
+  function createCandidate(mission) {
+    const cand = candidate.createCandidate(journal.paths(root).root, mission);
+    const launch = candidate.launchCandidate(cand);
+    const verified = candidate.verifyLaunch({ candidate: cand, launch });
+    const cleanup = candidate.cleanupExactPid(launch);
+    const result = {
+      manifestPath: cand.manifestPath,
+      candidateId: cand.candidateId,
+      launch: { launched: launch.launched, pid: launch.pid || null },
+      verified,
+      cleanup
+    };
+    setField(mission, "candidate", result);
+    emit({ type: "candidate.verified", missionId: mission.id, result });
+    if (!verified.ok || !cleanup.ok) setMissionState(mission, "blocked", { blocker: verified.reason || cleanup.reason });
+    else setMissionState(mission, "accepting");
+  }
+
+  function accept(mission) {
+    const commands = mission.acceptanceCommands && mission.acceptanceCommands.length
+      ? mission.acceptanceCommands
+      : mission.verifyCommands;
+    const results = commands.map((command) => {
+      const allowed = policy.commandAllowed(command);
+      if (!allowed.ok) return { command, passed: false, refused: true, reason: allowed.detail || allowed.reason };
+      const r = spawnSync("/bin/bash", ["-lc", command], { cwd: mission.worktree, encoding: "utf8", timeout: 120000 });
+      return { command, passed: r.status === 0, exitCode: r.status, output: `${r.stdout || ""}${r.stderr || ""}`.slice(-2000) };
+    });
+    setField(mission, "acceptance", results);
+    emit({ type: "acceptance.finished", missionId: mission.id, results });
+    if (results.some((r) => !r.passed)) return queueRepair(mission, results.map((r) => `acceptance failed: ${r.command}`));
+    const rel = mission.releasePolicy
+      ? releaseTrain.release(mission, { shipIt: !!mission.releasePolicy.shipIt })
+      : { ok: true, released: false, reason: "release-not-requested" };
+    setField(mission, "release", rel);
+    emit({ type: "release.evaluated", missionId: mission.id, result: rel });
+    if (!rel.ok && mission.releasePolicy && mission.releasePolicy.required) {
+      setMissionState(mission, "blocked", { blocker: rel.reason });
+      return;
+    }
     setMissionState(mission, "ready_for_human_check");
     emit({ type: "receipt", missionId: mission.id, status: "READY_FOR_HUMAN_CHECK", summary: renderReceipt(mission) });
   }
@@ -129,12 +193,15 @@ function createController({ root, adapter }) {
       return { progressed: true, summary: "architected goal" };
     }
     state = journal.load(root);
-    const mission = [...state.missions.values()].find((m) => ["queued", "building", "repair", "verifying", "reviewing"].includes(m.state));
+    const mission = [...state.missions.values()].find((m) => ["queued", "building", "repair", "verifying", "reviewing", "integrating", "candidate", "accepting"].includes(m.state));
     if (!mission) return { progressed: false, summary: "idle" };
     try {
       if (["queued", "building", "repair"].includes(mission.state)) await build(mission);
       else if (mission.state === "verifying") verify(mission);
       else if (mission.state === "reviewing") await review(mission);
+      else if (mission.state === "integrating") integrate(mission);
+      else if (mission.state === "candidate") createCandidate(mission);
+      else if (mission.state === "accepting") accept(mission);
       journal.writeSnapshot(root);
       return { progressed: true, summary: `advanced ${mission.id}` };
     } catch (e) {
@@ -198,7 +265,8 @@ function parseReview(text) {
 
 function renderReceipt(mission) {
   const gates = (mission.lastGateResults || []).map((g) => `${g.passed ? "PASS" : "FAIL"} ${g.command}`).join("; ");
-  return `${mission.id}: ${gates}. Human app check required. No merge/deploy performed.`;
+  const acceptance = (mission.acceptance || []).map((g) => `${g.passed ? "PASS" : "FAIL"} ${g.command}`).join("; ");
+  return `${mission.id}: gates=[${gates}] acceptance=[${acceptance}]. Human app check required.`;
 }
 
 module.exports = { createController, parseReview, workerPrompt, reviewPrompt };

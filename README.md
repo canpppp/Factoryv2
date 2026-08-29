@@ -6,9 +6,6 @@ Current release:
 
 - `F0`: durable controller primitives: append-only journal, materialized state, one-writer lease, resumable thread IDs, restart/resume.
 - `F1`: autonomous architect/builder/verifier/reviewer/repair loop with bounded repairs.
-
-Planned release train:
-
 - `F2`: Goal Envelopes: one human approval for a goal, with protected authority classes still stopping the run.
 - `F3`: canonical candidate system: exact UI/runtime pairing, dependency closure, candidate manifest, LaunchServices verification, exact-PID cleanup.
 - `F4`: automated app acceptance and `READY_FOR_HUMAN_CHECK`.

@@ -2,7 +2,7 @@
 
 const { spawnSync } = require("node:child_process");
 
-for (const file of ["tests/f0-f1-proof.test.js", "tests/jarvis-docs-test-proof.test.js"]) {
+for (const file of ["tests/f0-f1-proof.test.js", "tests/jarvis-docs-test-proof.test.js", "tests/f2-envelope-proof.test.js", "tests/f3-f5-proof.test.js"]) {
   const r = spawnSync(process.execPath, [file], { stdio: "inherit" });
   if (r.status !== 0) process.exit(r.status);
 }

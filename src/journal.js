@@ -73,7 +73,7 @@ function materialize(events) {
     });
     if (e.type === "mission.field") {
       const m = missions.get(e.missionId);
-      const allowed = ["workerThreadId", "reviewerThreadId", "worktree", "attempts", "repairRounds", "lastFindings", "lastGateResults", "commit"];
+      const allowed = ["workerThreadId", "reviewerThreadId", "worktree", "attempts", "repairRounds", "lastFindings", "lastGateResults", "commit", "integration", "candidate", "acceptance", "release"];
       if (m && allowed.includes(e.field)) m[e.field] = e.value;
     }
     if (e.type === "receipt") receipts.push(e);
