@@ -3,7 +3,7 @@
 const ITEMS = Object.freeze([
   ["A", "one-command goal execution", "proved"],
   ["B", "goal decomposition", "proved"],
-  ["C", "persistent autonomous execution", "partial"],
+  ["C", "persistent autonomous execution", "proved"],
   ["D", "worker recovery", "proved"],
   ["E", "reviewer independence", "proved"],
   ["F", "authoritative evidence", "proved"],
