@@ -6,6 +6,7 @@ const fs = require("node:fs");
 const { createController } = require("../src/controller");
 const journal = require("../src/journal");
 const report = require("../src/report");
+const audit = require("../src/audit");
 const { fakeAdapter } = require("../src/fake-agent");
 
 const argv = process.argv.slice(2);
@@ -124,7 +125,11 @@ async function main() {
     console.log(mission.candidate.manifestPath);
     return;
   }
-  die("commands: init, goal, run, status, inspect, pause, resume, decisions, accept, reject, ship, candidate open");
+  if (cmd === "audit") {
+    console.log(audit.renderProductionAudit());
+    return;
+  }
+  die("commands: init, goal, run, status, inspect, pause, resume, decisions, accept, reject, ship, candidate open, audit");
 }
 
 main().catch((e) => die(e.stack || e.message));

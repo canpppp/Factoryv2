@@ -28,3 +28,4 @@ The current suite also proves:
 - reports derive from the journal and cannot be forced to summarize failed gates as passing;
 - protected authority goals surface as `HUMAN_DECISION_REQUIRED`;
 - compact operator commands exist for status, inspection, pause/resume, decisions, human acceptance/rejection, candidate lookup, and ship-it recording.
+- `factoryv2 audit` reports A-Q production acceptance status.
