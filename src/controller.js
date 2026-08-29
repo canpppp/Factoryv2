@@ -21,8 +21,15 @@ function createController({ root, adapter }) {
   if (!adapter) throw new Error("controller needs adapter");
 
   const emit = (event) => journal.append(root, event);
-  const setMissionState = (mission, to, extra = {}) => emit({ type: "mission.state", missionId: mission.id, from: mission.state, to, ...extra });
-  const setField = (mission, field, value) => emit({ type: "mission.field", missionId: mission.id, field, value });
+  const setMissionState = (mission, to, extra = {}) => {
+    emit({ type: "mission.state", missionId: mission.id, from: mission.state, to, ...extra });
+    mission.state = to;
+    if (extra.blocker !== undefined) mission.blocker = extra.blocker;
+  };
+  const setField = (mission, field, value) => {
+    emit({ type: "mission.field", missionId: mission.id, field, value });
+    mission[field] = value;
+  };
 
   function enqueueGoal({ goal, repo, missionOverrides = {} }) {
     const impact = policy.protectedImpact(goal);

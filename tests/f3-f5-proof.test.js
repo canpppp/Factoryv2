@@ -49,6 +49,8 @@ async function runFactoryv2SelfRelease() {
   assert.strictEqual(mission.candidate.verified.ok, true);
   assert.strictEqual(mission.candidate.cleanup.ok, true);
   assert.strictEqual(mission.release.mergedToMain, true);
+  const receipt = state.events.find((e) => e.type === "receipt" && e.missionId === mission.id);
+  assert.match(receipt.summary, /acceptance=\[PASS node -e/, "receipt did not include actual acceptance result");
   assert.match(H.git(repo, ["show", "main:src/add.js"]), /a \+ b/, "Factoryv2 self-release did not merge main");
 }
 
