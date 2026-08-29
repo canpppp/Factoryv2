@@ -5,7 +5,7 @@ Generated from the self-hosting production acceptance contract.
 ## P0
 
 - Multi-mission Goal Envelope decomposition with dependency ordering.
-- Persistent restart/resume through every controller phase.
+- Persistent restart/resume through every controller phase. Initial architecture, verification, review, and repair phase-boundary restart proof is implemented.
 - Worker recovery for interruption, lost thread, malformed response, and timeout.
 - Journal-derived reports that cannot contradict deterministic gates.
 - Protected boundary classifier returns `HUMAN_DECISION_REQUIRED`.
