@@ -27,6 +27,7 @@ Generated from the self-hosting production acceptance contract.
 - JARVIS docs/test-only proof.
 - F2 envelope proof.
 - F3/F4/F5 candidate/release simulation proof.
+- Long autonomous endurance proof with multi-mission ordering, interruption/restart, reviewer rejection, repair, candidate construction, acceptance, and human-check receipts.
 
 ## Next Production Mission
 
