@@ -18,7 +18,7 @@ Generated from the self-hosting production acceptance contract.
 
 ## P2
 
-- Ship-it release train with final main rebuild, candidate/main equivalence, rollback preservation, deploy smoke, and deterministic rollback on failure.
+- Ship-it release train with final main rebuild, candidate/main equivalence, rollback preservation, deploy smoke, and deterministic rollback on failure. Initial ship-it rebuild/deploy/smoke/rollback simulation is implemented.
 - Compact operator CLI for `goal`, `status`, `inspect`, `pause`, `resume`, `decisions`, `candidate open`, `accept`, `reject`, and `ship`.
 
 ## Current Bootstrap Proofs
