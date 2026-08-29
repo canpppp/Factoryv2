@@ -9,7 +9,8 @@
   },
   "scripts": {
     "test": "node tests/run.js",
-    "test:f0f1": "node tests/f0-f1-proof.test.js"
+    "test:f0f1": "node tests/f0-f1-proof.test.js",
+    "test:macos-launchservices": "FACTORYV2_RUN_MACOS_LS=1 node tests/macos-launchservices-proof.test.js"
   },
   "engines": {
     "node": ">=20"
