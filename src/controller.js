@@ -121,7 +121,7 @@ function createController({ root, adapter }) {
   function verify(mission) {
     const results = [];
     for (const command of mission.verifyCommands || []) {
-      const allowed = policy.commandAllowed(command);
+      const allowed = policy.commandAllowed(command, { trustDomain: mission.trustDomain });
       if (!allowed.ok) {
         results.push({ command, passed: false, refused: true, reason: allowed.detail || allowed.reason });
         continue;
@@ -183,7 +183,7 @@ function createController({ root, adapter }) {
       ? mission.acceptanceCommands
       : mission.verifyCommands;
     const results = commands.map((command) => {
-      const allowed = policy.commandAllowed(command);
+      const allowed = policy.commandAllowed(command, { trustDomain: mission.trustDomain });
       if (!allowed.ok) return { command, passed: false, refused: true, reason: allowed.detail || allowed.reason };
       const r = spawnSync("/bin/bash", ["-lc", command], { cwd: mission.worktree, encoding: "utf8", timeout: 120000 });
       return { command, passed: r.status === 0, exitCode: r.status, output: `${r.stdout || ""}${r.stderr || ""}`.slice(-2000) };
