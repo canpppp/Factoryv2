@@ -59,6 +59,15 @@ async function main() {
   fs.writeFileSync(path.join(contentRoot, "CLAUDE.md"), "# Another project\n");
   assert.throws(() => content.send("content", "work"), errorCode("CHANNEL_PROJECT_MISMATCH"));
 
+  const unreadablePath = path.join(fixture.dir, "unreadable-channels.json");
+  const markerDirectory = path.join(contentRoot, "MARKER");
+  fs.mkdirSync(markerDirectory);
+  fs.writeFileSync(unreadablePath, JSON.stringify([{ id: "unreadable", name: "Unreadable", cwd: contentRoot, engine: "claude", writeAuthority: "none", projectIdentity: { marker: "MARKER", markerContains: "identity" } }]));
+  const unreadable = createChannelRegistry({ root: H.tmp("factoryv2-channel-unreadable-"), definitionsPath: unreadablePath });
+  unreadable.ensureDefaults();
+  assert.strictEqual(unreadable.status("unreadable").state, "unavailable");
+  assert.match(unreadable.status("unreadable").unavailableReason, /marker file/);
+
   const apiSocket = path.join(os.tmpdir(), `factoryv2-channel-api-${process.pid}.sock`);
   const api = createChannelApi({ root, registry, socketPath: apiSocket });
   await api.start();

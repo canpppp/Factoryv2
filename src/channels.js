@@ -243,8 +243,14 @@ function validateProject(channel) {
   const markerPath = identity.marker ? path.join(channel.cwd, identity.marker) : null;
   if (markerPath && !fs.existsSync(markerPath)) return { ok: false, code: "CHANNEL_PROJECT_MISMATCH", reason: `project marker missing: ${identity.marker}` };
   if (identity.markerContains) {
-    if (!markerPath || !fs.statSync(markerPath).isFile()) return { ok: false, code: "CHANNEL_PROJECT_MISMATCH", reason: "content-bound project identity needs a marker file" };
-    const marker = fs.readFileSync(markerPath, "utf8");
+    let marker;
+    try {
+      if (!markerPath || !fs.statSync(markerPath).isFile()) return { ok: false, code: "CHANNEL_PROJECT_MISMATCH", reason: "content-bound project identity needs a marker file" };
+      marker = fs.readFileSync(markerPath, "utf8");
+    } catch (error) {
+      const denied = error.code === "EACCES" || error.code === "EPERM";
+      return { ok: false, code: denied ? "CHANNEL_ROOT_PERMISSION_DENIED" : "CHANNEL_PROJECT_MISMATCH", reason: denied ? `project root permission denied: ${channel.cwd}` : `project marker unreadable: ${identity.marker}` };
+    }
     if (!marker.includes(identity.markerContains)) return { ok: false, code: "CHANNEL_PROJECT_MISMATCH", reason: `project marker content does not match: ${identity.marker}` };
   }
   if (identity.gitRemote) {

@@ -13,4 +13,6 @@ Factory channels fail closed unless a project root has positive identity evidenc
 
 The launchd plist persists only configured `FACTORYV2_*_CWD` values referenced by channel definitions. Root identity is part of the channel identity key, so changing the root or marker binding clears the old provider session before more work is dispatched.
 
+If macOS denies the background daemon access to a privacy-protected root, that channel reports `CHANNEL_ROOT_PERMISSION_DENIED` and remains unavailable. Other channels continue refreshing. Factory does not copy the project, weaken its identity marker, or route around the OS boundary.
+
 Historical sessions whose working directory was a shared parent remain evidence only. They are not resumed into a newly bound dedicated root.
