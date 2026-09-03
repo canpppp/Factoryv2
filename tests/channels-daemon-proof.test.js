@@ -73,6 +73,10 @@ async function main() {
 
   assert.match(plist({ root: daemonRoot }), /KeepAlive/);
   assert.match(plist({ root: daemonRoot }), /FACTORYV2_HOME/);
+  const boundPlist = plist({ root: daemonRoot, channelRoots: { FACTORYV2_KAYLAS_CWD: "/tmp/Kaylas & Co", UNRELATED_SECRET: "never" } });
+  assert.match(boundPlist, /FACTORYV2_KAYLAS_CWD/);
+  assert.match(boundPlist, /\/tmp\/Kaylas &amp; Co/);
+  assert.doesNotMatch(boundPlist, /UNRELATED_SECRET|never/);
   const notification = notificationFor({ type: "receipt", status: "READY_FOR_HUMAN_CHECK", missionId: "m1", summary: "ready" });
   assert.ok(NOTIFICATION_TYPES.has(notification.type));
   assert.strictEqual(notificationFor({ type: "channel.job.finished" }), null);

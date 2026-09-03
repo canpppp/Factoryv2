@@ -16,6 +16,9 @@ async function main() {
   const fixture = H.makeChannelDefinitions();
   const registry = createChannelRegistry({ root, definitionsPath: fixture.definitionsPath });
   registry.ensureDefaults();
+  const initialEventCount = journal.load(root).events.length;
+  registry.ensureDefaults();
+  assert.strictEqual(journal.load(root).events.length, initialEventCount, "unchanged definitions emitted journal events");
 
   registry.pause("kaylas-store");
   registry.ensureDefaults();
@@ -45,6 +48,16 @@ async function main() {
   const wrong = createChannelRegistry({ root: H.tmp("factoryv2-channel-wrong-"), definitionsPath: wrongPath });
   wrong.ensureDefaults();
   assert.throws(() => wrong.send("wrong", "work"), errorCode("CHANNEL_PROJECT_MISMATCH"));
+
+  const contentRoot = fs.mkdtempSync(path.join(os.tmpdir(), "factoryv2-content-identity-"));
+  fs.writeFileSync(path.join(contentRoot, "CLAUDE.md"), "# Dedicated Kaylas workspace\n");
+  const contentPath = path.join(fixture.dir, "content-channels.json");
+  fs.writeFileSync(contentPath, JSON.stringify([{ id: "content", name: "Content", cwd: contentRoot, engine: "claude", writeAuthority: "none", projectIdentity: { marker: "CLAUDE.md", markerContains: "Dedicated Kaylas workspace" } }]));
+  const content = createChannelRegistry({ root: H.tmp("factoryv2-channel-content-"), definitionsPath: contentPath });
+  content.ensureDefaults();
+  assert.strictEqual(content.status("content").state, "idle");
+  fs.writeFileSync(path.join(contentRoot, "CLAUDE.md"), "# Another project\n");
+  assert.throws(() => content.send("content", "work"), errorCode("CHANNEL_PROJECT_MISMATCH"));
 
   const apiSocket = path.join(os.tmpdir(), `factoryv2-channel-api-${process.pid}.sock`);
   const api = createChannelApi({ root, registry, socketPath: apiSocket });
