@@ -1,5 +1,6 @@
 ---
 name: token-governor
+version: 1
 description: Select a model tier, minimize loaded context, and record usage when starting or resuming agent work.
 ---
 # Token Governor

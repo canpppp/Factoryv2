@@ -1,5 +1,6 @@
 ---
 name: human-feedback
+version: 1
 description: Convert a failed human app check into a bounded repair mission with exact artifact, reproduction, expected behavior, and preserved restrictions.
 ---
 # Human Feedback

@@ -6,13 +6,15 @@ const journal = require("./journal");
 const { createController } = require("./controller");
 const { createAdapter } = require("./adapters");
 const { createChannelRegistry } = require("./channels");
+const { createChannelApi } = require("./channel-api");
 
 const NOTIFICATION_TYPES = new Set(["READY_FOR_HUMAN_CHECK", "HUMAN_DECISION_REQUIRED", "BLOCKED_EXTERNAL", "SHIPPED"]);
 
-function createDaemon({ root, engine = process.env.FACTORYV2_ENGINE || "claude", pollMs = 5000, adapterFactory, notifier = defaultNotifier } = {}) {
+function createDaemon({ root, engine = process.env.FACTORYV2_ENGINE || "claude", pollMs = 5000, adapterFactory, notifier = defaultNotifier, channelDefinitionsPath } = {}) {
   if (!root) throw new Error("factoryd needs root");
   const makeAdapter = adapterFactory || ((config) => createAdapter(config));
-  const channels = createChannelRegistry({ root, adapterFactory: makeAdapter });
+  const channels = createChannelRegistry({ root, adapterFactory: makeAdapter, definitionsPath: channelDefinitionsPath });
+  const channelApi = createChannelApi({ root, registry: channels });
   let stopping = false;
 
   async function runOnce() {
@@ -36,19 +38,24 @@ function createDaemon({ root, engine = process.env.FACTORYV2_ENGINE || "claude",
 
   async function start() {
     journal.append(root, { type: "daemon.started", pid: process.pid, engine });
-    while (!stopping) {
-      try {
-        await runOnce();
-      } catch (error) {
-        journal.append(root, { type: "daemon.error", message: error.message, code: error.code || null });
+    await channelApi.start();
+    try {
+      while (!stopping) {
+        try {
+          await runOnce();
+        } catch (error) {
+          journal.append(root, { type: "daemon.error", message: error.message, code: error.code || null });
+        }
+        if (!stopping) await sleep(pollMs);
       }
-      if (!stopping) await sleep(pollMs);
+    } finally {
+      await channelApi.close();
+      journal.append(root, { type: "daemon.stopped", pid: process.pid });
     }
-    journal.append(root, { type: "daemon.stopped", pid: process.pid });
   }
 
   function stop() { stopping = true; }
-  return { runOnce, start, stop, channels };
+  return { runOnce, start, stop, channels, channelApi };
 }
 
 function deliverNotifications(root, notifier) {

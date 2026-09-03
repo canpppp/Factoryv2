@@ -1,5 +1,6 @@
 ---
 name: memory-curator
+version: 1
 description: Curate durable working facts and retrieve small session excerpts without creating another authoritative project history.
 ---
 # Memory Curator

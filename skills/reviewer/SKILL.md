@@ -1,5 +1,6 @@
 ---
 name: reviewer
+version: 1
 description: Independently review a completed mission after deterministic gates, using a distinct read-only session.
 ---
 # Reviewer

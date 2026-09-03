@@ -1,5 +1,6 @@
 ---
 name: source-retriever
+version: 1
 description: Retrieve focused authoritative source excerpts when a task depends on prior sessions, documents, logs, or research.
 ---
 # Source Retriever

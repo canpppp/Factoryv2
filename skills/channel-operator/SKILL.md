@@ -1,5 +1,6 @@
 ---
 name: channel-operator
+version: 1
 description: Dispatch, inspect, pause, cancel, or resume a durable specialist channel when a request names an agent, project lane, or channel operation.
 ---
 # Channel Operator

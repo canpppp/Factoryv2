@@ -3,7 +3,18 @@
 function createChannelTools(registry) {
   return {
     "channel.list": async () => registry.list().map(summary),
-    "channel.send": async ({ channelId, prompt, kind, deterministic }) => registry.send(channelId, prompt, { kind, deterministic }),
+    "channel.send": async (params) => registry.send(params.channelId, params.objective || params.prompt, {
+      jobId: params.jobId,
+      kind: params.kind,
+      contextRefs: params.contextRefs,
+      evidenceRequired: params.evidenceRequired,
+      readWriteBoundary: params.readWriteBoundary,
+      doneCondition: params.doneCondition,
+      tokenBudget: params.tokenBudget,
+      timeoutMs: params.timeoutMs,
+      priority: params.priority,
+      requestedTools: params.requestedTools
+    }),
     "channel.status": async ({ channelId }) => summary(registry.status(channelId)),
     "channel.result": async ({ channelId }) => registry.result(channelId),
     "channel.cancel": async ({ channelId }) => summary(registry.cancel(channelId)),
@@ -20,7 +31,10 @@ function summary(channel) {
     currentJob: channel.currentJob?.id || null,
     queued: channel.queue?.length || 0,
     heartbeat: channel.heartbeat,
-    latestResult: channel.latestResult
+    latestResult: channel.latestResult,
+    lastSuccessfulJob: channel.lastSuccessfulJob,
+    lastFailure: channel.lastFailure,
+    unavailableReason: channel.unavailableReason || null
   };
 }
 

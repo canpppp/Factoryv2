@@ -1,5 +1,6 @@
 ---
 name: repo-capsule
+version: 1
 description: Create or refresh compact repository context before implementation, especially when a persistent channel must avoid replaying prior chats.
 ---
 # Repo Capsule

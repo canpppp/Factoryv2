@@ -1,5 +1,6 @@
 ---
 name: task-compiler
+version: 1
 description: Compile a high-level operator goal into bounded missions when scope, dependencies, tests, and protected authority must be made explicit.
 ---
 # Task Compiler

@@ -24,6 +24,8 @@ factoryv2 daemon install --engine claude --root ~/.factoryv2
 
 `factoryd` is a headless launchd worker. Its only operator notification classes are `READY_FOR_HUMAN_CHECK`, `HUMAN_DECISION_REQUIRED`, `BLOCKED_EXTERNAL`, and `SHIPPED`.
 
+The daemon also owns a mode-`0600` Unix-socket API at `<state-root>/daemon/channel-api.sock`. Its allowlist is limited to `channel.list`, `channel.send`, `channel.status`, `channel.result`, `channel.cancel`, and `channel.resume`; see [docs/CHANNEL_API.md](docs/CHANNEL_API.md). Business channels require explicitly configured, identity-marked project roots and remain unavailable when those roots are absent.
+
 ## Local proof
 
 ```sh
@@ -42,3 +44,6 @@ The current suite also proves:
 - protected authority goals surface as `HUMAN_DECISION_REQUIRED`;
 - compact operator commands exist for status, inspection, pause/resume, decisions, human acceptance/rejection, candidate lookup, and ship-it recording.
 - `factoryv2 audit` reports dynamic A-I control-plane status from implementation and journal evidence. It does not label fixture-only behavior as live proof.
+- channel task envelopes are bounded, caller job IDs are durable/idempotent, and provider outages preserve work while deterministic jobs continue;
+- session search is rebuildable SQLite FTS with timestamp/channel/session/job provenance;
+- skill improvements remain inactive proposals until existing authority gates permit activation.

@@ -1,12 +1,12 @@
 [
-  {"name":"channel-operator","summary":"Dispatch, inspect, pause and resume durable specialist channels.","triggers":["ask agent","channel status","pause agent"]},
-  {"name":"task-compiler","summary":"Compile a short goal into bounded missions and authority classes.","triggers":["new goal","mission plan"]},
-  {"name":"repo-capsule","summary":"Build a compact, evidence-based repository context capsule.","triggers":["inspect repo","project context"]},
-  {"name":"source-retriever","summary":"Retrieve narrow authoritative excerpts instead of entire archives.","triggers":["find source","prior research"]},
-  {"name":"human-feedback","summary":"Turn app-level human feedback into reproducible repair evidence.","triggers":["human check failed","feels wrong"]},
-  {"name":"test-selector","summary":"Choose deterministic tests proportional to scope and risk.","triggers":["verify change","select tests"]},
-  {"name":"reviewer","summary":"Perform independent read-only review grounded in gates and diff evidence.","triggers":["review mission","independent review"]},
-  {"name":"candidate-release","summary":"Build and verify exact candidate identity while preserving release gates.","triggers":["candidate","ready for human check","ship it"]},
-  {"name":"memory-curator","summary":"Store small durable facts and retrieve relevant session excerpts.","triggers":["remember","session history"]},
-  {"name":"token-governor","summary":"Route models, bound context and record token/cost evidence.","triggers":["token budget","model route","context size"]}
+  {"name":"channel-operator","version":1,"summary":"Dispatch, inspect, pause and resume durable specialist channels.","triggers":["ask agent","channel status","pause agent"]},
+  {"name":"task-compiler","version":1,"summary":"Compile a short goal into bounded missions and authority classes.","triggers":["new goal","mission plan"]},
+  {"name":"repo-capsule","version":1,"summary":"Build a compact, evidence-based repository context capsule.","triggers":["inspect repo","project context"]},
+  {"name":"source-retriever","version":1,"summary":"Retrieve narrow authoritative excerpts instead of entire archives.","triggers":["find source","prior research"]},
+  {"name":"human-feedback","version":1,"summary":"Turn app-level human feedback into reproducible repair evidence.","triggers":["human check failed","feels wrong"]},
+  {"name":"test-selector","version":1,"summary":"Choose deterministic tests proportional to scope and risk.","triggers":["verify change","select tests"]},
+  {"name":"reviewer","version":1,"summary":"Perform independent read-only review grounded in gates and diff evidence.","triggers":["review mission","independent review"]},
+  {"name":"candidate-release","version":1,"summary":"Build and verify exact candidate identity while preserving release gates.","triggers":["candidate","ready for human check","ship it"]},
+  {"name":"memory-curator","version":1,"summary":"Store small durable facts and retrieve relevant session excerpts.","triggers":["remember","session history"]},
+  {"name":"token-governor","version":1,"summary":"Route models, bound context and record token/cost evidence.","triggers":["token budget","model route","context size"]}
 ]

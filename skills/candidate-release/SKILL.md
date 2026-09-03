@@ -1,5 +1,6 @@
 ---
 name: candidate-release
+version: 1
 description: Build, identify, verify, clean up, and release exact candidate artifacts when a mission reaches integration or the human says Ship it.
 ---
 # Candidate Release

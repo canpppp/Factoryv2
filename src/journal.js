@@ -83,7 +83,7 @@ function materialize(events) {
       if (m && allowed.includes(e.field)) m[e.field] = e.value;
     }
     if (e.type === "receipt") receipts.push(e);
-    if (e.type === "channel.registered") channels.set(e.channel.id, { ...e.channel, queue: [], currentJob: null, latestResult: null, heartbeat: null, state: "idle" });
+    if (e.type === "channel.registered") channels.set(e.channel.id, { ...e.channel, queue: [], currentJob: null, latestResult: null, lastSuccessfulJob: null, lastFailure: null, heartbeat: null, state: e.channel.state || "idle" });
     if (e.type === "channel.updated") Object.assign(channels.get(e.channelId) || {}, e.patch || {});
     if (e.type === "channel.job.queued") {
       const channel = channels.get(e.channelId);
@@ -100,16 +100,25 @@ function materialize(events) {
     }
     if (e.type === "channel.job.deferred") {
       const channel = channels.get(e.channelId);
-      if (channel?.currentJob && e.fallbackTier) channel.currentJob.modelFallback = e.fallbackTier;
+      if (channel?.currentJob) {
+        if (e.fallbackTier) channel.currentJob.modelFallback = e.fallbackTier;
+        channel.lastFailure = { ok: false, jobId: e.jobId, code: e.reason, error: e.message || e.reason, at: e.at, recoverable: true };
+        channel.state = e.reason === "PAUSED" ? "paused" : "waiting_provider";
+      }
     }
     if (e.type === "channel.session") {
       const channel = channels.get(e.channelId);
-      if (channel) channel.sessionId = e.sessionId;
+      if (channel) {
+        channel.sessionId = e.sessionId;
+        channel.sessionEngine = e.sessionId ? (e.engine || channel.engine) : null;
+      }
     }
     if (["channel.job.finished", "channel.job.failed", "channel.job.cancelled"].includes(e.type)) {
       const channel = channels.get(e.channelId);
       if (channel) {
         channel.latestResult = e.result || { ok: false, error: e.error || e.type };
+        if (e.type === "channel.job.finished") channel.lastSuccessfulJob = e.result;
+        else channel.lastFailure = e.result || { ok: false, error: e.error || e.type, jobId: e.jobId || null, at: e.at };
         channel.currentJob = null;
         channel.state = e.type === "channel.job.finished" ? "idle" : "blocked";
         channel.heartbeat = e.at;

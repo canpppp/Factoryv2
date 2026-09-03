@@ -1,5 +1,6 @@
 ---
 name: test-selector
+version: 1
 description: Select deterministic verification and acceptance commands after scope is known or a prior gate failed.
 ---
 # Test Selector

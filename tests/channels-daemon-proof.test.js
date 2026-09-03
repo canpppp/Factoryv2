@@ -18,7 +18,8 @@ const adapterFactory = ({ engine, ...config }) => engine === "codex"
 
 async function main() {
   const root = H.tmp("factoryv2-channels-");
-  const registry = createChannelRegistry({ root, adapterFactory });
+  const fixtureConfig = H.makeChannelDefinitions();
+  const registry = createChannelRegistry({ root, adapterFactory, definitionsPath: fixtureConfig.definitionsPath });
   assert.strictEqual(registry.ensureDefaults().length, 6);
 
   registry.send("kaylas-store", "Investigate yesterday's refund spike.");
@@ -26,7 +27,7 @@ async function main() {
   const firstSession = registry.status("kaylas-store").sessionId;
   assert.match(firstSession, /^[0-9a-f-]{36}$/);
 
-  const restarted = createChannelRegistry({ root, adapterFactory });
+  const restarted = createChannelRegistry({ root, adapterFactory, definitionsPath: fixtureConfig.definitionsPath });
   restarted.send("kaylas-store", "Summarize the evidence.");
   await restarted.runNext();
   assert.strictEqual(restarted.status("kaylas-store").sessionId, firstSession, "restart did not resume exact Claude session");
@@ -60,12 +61,12 @@ async function main() {
   }
 
   const daemonRoot = H.tmp("factoryv2-daemon-");
-  const daemon1 = createDaemon({ root: daemonRoot, adapterFactory, pollMs: 1 });
+  const daemon1 = createDaemon({ root: daemonRoot, adapterFactory, pollMs: 1, channelDefinitionsPath: fixtureConfig.definitionsPath });
   daemon1.channels.ensureDefaults();
   daemon1.channels.send("kaylas-store", "First daemon turn.");
   await daemon1.runOnce();
   const daemonSession = daemon1.channels.status("kaylas-store").sessionId;
-  const daemon2 = createDaemon({ root: daemonRoot, adapterFactory, pollMs: 1 });
+  const daemon2 = createDaemon({ root: daemonRoot, adapterFactory, pollMs: 1, channelDefinitionsPath: fixtureConfig.definitionsPath });
   daemon2.channels.send("kaylas-store", "Resumed after daemon restart.");
   await daemon2.runOnce();
   assert.strictEqual(daemon2.channels.status("kaylas-store").sessionId, daemonSession);
