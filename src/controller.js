@@ -88,6 +88,7 @@ function createController({ root, adapter }) {
         if (id && id !== mission.workerThreadId) setField(mission, "workerThreadId", id);
       }
     });
+    emit({ type: "agent.receipt", missionId: mission.id, role: "worker", receipt: compactReceipt(result) });
     if (result.finalResponse && /MALFORMED_WORKER_RESPONSE/.test(result.finalResponse)) {
       const e = new Error("malformed worker response");
       e.code = "MALFORMED_WORKER_RESPONSE";
@@ -144,6 +145,7 @@ function createController({ root, adapter }) {
         if (id && id !== mission.reviewerThreadId) setField(mission, "reviewerThreadId", id);
       }
     });
+    emit({ type: "agent.receipt", missionId: mission.id, role: "reviewer", receipt: compactReceipt(res) });
     const verdict = parseReview(res.finalResponse);
     emit({ type: "review.finished", missionId: mission.id, verdict });
     if (mission.workerThreadId && mission.workerThreadId === mission.reviewerThreadId) {
@@ -257,6 +259,11 @@ function createController({ root, adapter }) {
         journal.writeSnapshot(root);
         return { progressed: true, interrupted: true, summary: `interrupted ${mission.id}; restart will resume` };
       }
+      if (e.code === "PROVIDER_QUOTA") {
+        emit({ type: "provider.quota", missionId: mission.id, engine: adapter.engine || "unknown", message: e.message });
+        journal.writeSnapshot(root);
+        return { progressed: false, backoff: true, summary: `provider quota for ${mission.id}` };
+      }
       if (["THREAD_NOT_FOUND", "TIMEOUT", "MALFORMED_WORKER_RESPONSE"].includes(e.code)) {
         setField(mission, "replacements", (mission.replacements || 0) + 1);
         emit({ type: "worker.replaced", missionId: mission.id, oldThreadId: mission.workerThreadId, reason: e.code });
@@ -277,13 +284,23 @@ function createController({ root, adapter }) {
       for (let i = 0; i < maxSteps; i++) {
         const r = await step();
         summary = r.summary;
-        if (r.interrupted || !r.progressed) break;
+        if (r.interrupted || r.backoff || !r.progressed) return { ok: true, summary, backoff: !!r.backoff };
       }
       return { ok: true, summary };
     });
   }
 
   return { enqueueGoal, run, step };
+}
+
+function compactReceipt(result) {
+  return {
+    ok: result.ok !== false,
+    engine: result.engine || null,
+    sessionId: result.sessionId || result.threadId || null,
+    metadata: result.metadata || {},
+    outputBytes: Buffer.byteLength(String(result.finalResponse || ""))
+  };
 }
 
 function isRunnable(mission, missions) {
@@ -335,4 +352,4 @@ function renderReceipt(mission) {
   return `${mission.id}: gates=[${gates}] acceptance=[${acceptance}]. Human app check required.`;
 }
 
-module.exports = { createController, parseReview, workerPrompt, reviewPrompt };
+module.exports = { createController, parseReview, workerPrompt, reviewPrompt, compactReceipt };
