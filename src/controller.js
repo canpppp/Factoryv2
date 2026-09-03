@@ -10,6 +10,8 @@ const candidate = require("./candidate");
 const releaseTrain = require("./release-train");
 const envelope = require("./envelope");
 const jarvisAcceptance = require("./jarvis-acceptance");
+const modelRouter = require("./model-router");
+const tokenGovernor = require("./token-governor");
 
 const MAX_REPAIRS = 2;
 
@@ -82,13 +84,17 @@ function createController({ root, adapter }) {
     const worktree = mission.worktree || git.ensureWorktree(root, mission);
     if (!mission.worktree) setField(mission, "worktree", worktree);
     setMissionState(mission, "building");
-    const worker = startOrResumeWorker(mission, worktree);
-    const result = await worker.run(workerPrompt(mission), {
+    const resumingWorker = !!mission.workerThreadId;
+    const workerPolicy = modelRouter.route({ kind: mission.repairRounds ? "difficult-repair" : "implementation", engine: adapter.engine || "claude", failedRepairs: mission.repairRounds || 0 });
+    const worker = startOrResumeWorker(mission, worktree, workerPolicy);
+    const prompt = workerPrompt(mission);
+    const result = await worker.run(prompt, {
       onThreadId: (id) => {
         if (id && id !== mission.workerThreadId) setField(mission, "workerThreadId", id);
       }
     });
     emit({ type: "agent.receipt", missionId: mission.id, role: "worker", receipt: compactReceipt(result) });
+    tokenGovernor.record(root, { scope: `mission:${mission.id}:worker`, prompt, receipt: result, modelPolicy: { ...workerPolicy, reusedSession: resumingWorker } });
     if (result.finalResponse && /MALFORMED_WORKER_RESPONSE/.test(result.finalResponse)) {
       const e = new Error("malformed worker response");
       e.code = "MALFORMED_WORKER_RESPONSE";
@@ -104,10 +110,11 @@ function createController({ root, adapter }) {
     setMissionState(mission, "verifying");
   }
 
-  function startOrResumeWorker(mission, worktree) {
-    if (!mission.workerThreadId) return adapter.startThread({ role: "worker", cwd: worktree, readOnly: false });
+  function startOrResumeWorker(mission, worktree, modelPolicy) {
+    const options = { role: "worker", cwd: worktree, readOnly: false, model: modelPolicy.model, maxTurns: 12 };
+    if (!mission.workerThreadId) return adapter.startThread(options);
     try {
-      return adapter.resumeThread(mission.workerThreadId, { role: "worker", cwd: worktree, readOnly: false });
+      return adapter.resumeThread(mission.workerThreadId, options);
     } catch (e) {
       if (e.code !== "THREAD_NOT_FOUND") throw e;
       const oldThreadId = mission.workerThreadId;
@@ -115,7 +122,7 @@ function createController({ root, adapter }) {
       setField(mission, "replacements", next);
       emit({ type: "worker.replaced", missionId: mission.id, oldThreadId, reason: e.code });
       setField(mission, "workerThreadId", null);
-      return adapter.startThread({ role: "worker", cwd: worktree, readOnly: false, handoffFrom: oldThreadId });
+      return adapter.startThread({ ...options, handoffFrom: oldThreadId });
     }
   }
 
@@ -137,15 +144,20 @@ function createController({ root, adapter }) {
   }
 
   async function review(mission) {
+    const resumingReviewer = !!mission.reviewerThreadId;
+    const reviewerPolicy = modelRouter.route({ kind: "routine-review", engine: adapter.engine || "claude" });
+    const options = { role: "reviewer", cwd: mission.worktree, readOnly: true, model: reviewerPolicy.model, maxTurns: 6 };
     const reviewer = mission.reviewerThreadId
-      ? adapter.resumeThread(mission.reviewerThreadId, { role: "reviewer", cwd: mission.worktree, readOnly: true })
-      : adapter.startThread({ role: "reviewer", cwd: mission.worktree, readOnly: true });
-    const res = await reviewer.run(reviewPrompt(mission), {
+      ? adapter.resumeThread(mission.reviewerThreadId, options)
+      : adapter.startThread(options);
+    const prompt = reviewPrompt(mission);
+    const res = await reviewer.run(prompt, {
       onThreadId: (id) => {
         if (id && id !== mission.reviewerThreadId) setField(mission, "reviewerThreadId", id);
       }
     });
     emit({ type: "agent.receipt", missionId: mission.id, role: "reviewer", receipt: compactReceipt(res) });
+    tokenGovernor.record(root, { scope: `mission:${mission.id}:reviewer`, prompt, receipt: res, modelPolicy: { ...reviewerPolicy, reusedSession: resumingReviewer } });
     const verdict = parseReview(res.finalResponse);
     emit({ type: "review.finished", missionId: mission.id, verdict });
     if (mission.workerThreadId && mission.workerThreadId === mission.reviewerThreadId) {
