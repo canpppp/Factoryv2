@@ -7,10 +7,12 @@ const { createController } = require("../src/controller");
 const journal = require("../src/journal");
 const report = require("../src/report");
 const audit = require("../src/audit");
-const { fakeAdapter } = require("../src/fake-agent");
+const { createAdapter } = require("../src/adapters");
+const { createChannelRegistry } = require("../src/channels");
+const { install: installLaunchd } = require("../src/launchd");
 
 const argv = process.argv.slice(2);
-const FLAGS_WITH_VALUES = new Set(["--root", "--repo", "--max-steps"]);
+const FLAGS_WITH_VALUES = new Set(["--root", "--repo", "--max-steps", "--engine"]);
 function positionals() {
   const out = [];
   for (let i = 0; i < argv.length; i++) {
@@ -45,13 +47,13 @@ async function main() {
     if (!text) die("usage: factoryv2 goal <goal text> [--repo <path>]");
     const repo = flag("repo", null);
     if (!repo) die("--repo is required for F0/F1");
-    const controller = createController({ root, adapter: fakeAdapter({}) });
+    const controller = createController({ root, adapter: createAdapter({ engine: flag("engine", process.env.FACTORYV2_ENGINE || "claude") }) });
     const goal = controller.enqueueGoal({ goal: text, repo: path.resolve(repo) });
     console.log(`queued ${goal.id}`);
     return;
   }
   if (cmd === "run") {
-    const controller = createController({ root, adapter: fakeAdapter({}) });
+    const controller = createController({ root, adapter: createAdapter({ engine: flag("engine", process.env.FACTORYV2_ENGINE || "claude") }) });
     const result = await controller.run({ maxSteps: Number(flag("max-steps", 100)) });
     console.log(result.summary);
     return;
@@ -126,10 +128,48 @@ async function main() {
     return;
   }
   if (cmd === "audit") {
-    console.log(audit.renderProductionAudit());
+    console.log(audit.renderProductionAudit(root));
     return;
   }
-  die("commands: init, goal, run, status, inspect, pause, resume, decisions, accept, reject, ship, candidate open, audit");
+  if (cmd === "channel") {
+    const action = pos[1];
+    const registry = createChannelRegistry({ root });
+    registry.ensureDefaults();
+    if (action === "list") {
+      for (const channel of registry.list()) console.log(`${channel.id}\t${channel.state}\t${channel.engine}\tqueued=${channel.queue.length}`);
+      return;
+    }
+    const id = pos[2];
+    if (!id) die("usage: factoryv2 channel <send|status|result|cancel|pause|resume> <channel-id>");
+    if (action === "send") {
+      const prompt = pos.slice(3).join(" ").trim();
+      const job = registry.send(id, prompt);
+      console.log(`queued ${job.id} on ${id}`);
+      return;
+    }
+    if (action === "status") {
+      const channel = registry.status(id);
+      console.log(`${channel.id} ${channel.state} current=${channel.currentJob?.id || "none"} queued=${channel.queue.length}`);
+      return;
+    }
+    if (action === "result") {
+      const result = registry.result(id);
+      console.log(result ? JSON.stringify(result) : "no result");
+      return;
+    }
+    if (action === "cancel") registry.cancel(id);
+    else if (action === "pause") registry.pause(id);
+    else if (action === "resume") registry.resume(id);
+    else die(`unknown channel action: ${action}`);
+    console.log(`${action}d ${id}`);
+    return;
+  }
+  if (cmd === "daemon" && pos[1] === "install") {
+    const file = installLaunchd({ root, engine: flag("engine", process.env.FACTORYV2_ENGINE || "claude") });
+    console.log(`installed ${file}`);
+    return;
+  }
+  die("commands: init, goal, run, status, inspect, pause, resume, decisions, accept, reject, ship, candidate open, channel, daemon install, audit");
 }
 
 main().catch((e) => die(e.stack || e.message));

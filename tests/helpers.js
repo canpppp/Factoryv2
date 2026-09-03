@@ -79,4 +79,25 @@ function makeJarvisDocsTestRepo(source) {
   return dir;
 }
 
-module.exports = { tmp, cleanup, git, makeBugRepo, makeRuntimeRepo, cloneRepo, makeJarvisDocsTestRepo };
+function makeChannelDefinitions() {
+  const dir = tmp("factoryv2-channel-project-");
+  fs.writeFileSync(path.join(dir, ".factory-channel.json"), JSON.stringify({ version: 1 }));
+  const ids = ["kaylas-store", "store-two", "quality-check", "facebook-product-launches", "invoice-audit", "jarvis-development"];
+  const definitions = ids.map((id) => ({
+    id,
+    name: id,
+    cwd: dir,
+    engine: ["quality-check", "invoice-audit", "jarvis-development"].includes(id) ? "codex" : "claude",
+    modelPolicy: { kind: id === "invoice-audit" ? "inventory" : "implementation" },
+    allowedTools: ["Read", "Glob", "Grep", "Bash"],
+    readWriteProfile: "read-only",
+    writeAuthority: "none",
+    projectIdentity: { marker: ".factory-channel.json" },
+    capsule: `Test capsule for ${id}.`
+  }));
+  const definitionsPath = path.join(dir, "channels.json");
+  fs.writeFileSync(definitionsPath, JSON.stringify(definitions));
+  return { dir, definitionsPath };
+}
+
+module.exports = { tmp, cleanup, git, makeBugRepo, makeRuntimeRepo, cloneRepo, makeJarvisDocsTestRepo, makeChannelDefinitions };

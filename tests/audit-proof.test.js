@@ -8,19 +8,18 @@ const H = require("./helpers");
 
 function main() {
   const items = audit.productionAudit();
-  assert.strictEqual(items.length, 17);
-  assert.deepStrictEqual(items.map((x) => x.id), "ABCDEFGHIJKLMNOPQ".split(""));
-  assert.ok(items.some((x) => x.id === "L" && x.status === "proved"));
-  assert.ok(items.some((x) => x.id === "M" && x.status === "proved"));
-  assert.ok(items.some((x) => x.id === "Q" && x.status === "proved"));
+  assert.strictEqual(items.length, 9);
+  assert.deepStrictEqual(items.map((x) => x.id), "ABCDEFGHI".split(""));
+  assert.ok(items.some((x) => x.id === "A" && x.status === "implemented"));
+  assert.ok(items.some((x) => x.id === "F" && x.status === "protocol-proved"));
 
   const root = H.tmp("factoryv2-audit-");
   const r = spawnSync(process.execPath, [path.join(__dirname, "../bin/factoryv2.js"), "--root", root, "audit"], { encoding: "utf8" });
   assert.strictEqual(r.status, 0);
-  assert.match(r.stdout, /A\. PROVED one-command goal execution/);
-  assert.match(r.stdout, /P\. PROVED Ship-it release train/);
+  assert.match(r.stdout, /A\. IMPLEMENTED normal run uses a real adapter/);
+  assert.match(r.stdout, /F\. PROTOCOL-PROVED compact goal and selective skills/);
 
-  console.log("Production audit proof passed");
+  console.log("Truthful control-plane audit proof passed");
 }
 
 try {

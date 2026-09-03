@@ -5,7 +5,8 @@
   "description": "Autonomous Factory V2 controller for building JARVIS with durable gates and human final check.",
   "type": "commonjs",
   "bin": {
-    "factoryv2": "bin/factoryv2.js"
+    "factoryv2": "bin/factoryv2.js",
+    "factoryd": "bin/factoryd.js"
   },
   "scripts": {
     "test": "node tests/run.js",

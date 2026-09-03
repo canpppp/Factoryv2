@@ -1,6 +1,6 @@
 # Factory V2
 
-Factory V2 is the controller that turns a high-level JARVIS goal into bounded internal missions, runs architect -> builder -> verifier -> independent reviewer -> repair loops, and stops only for real product/protected decisions or the final app check.
+Factory V2 is an append-only, restartable controller for bounded agent missions and persistent specialist channels. Normal CLI and daemon execution use real Claude Code or Codex subprocess adapters; `fakeAdapter` is retained only for deterministic tests.
 
 Current release:
 
@@ -11,13 +11,28 @@ Current release:
 - `F4`: automated app acceptance and `READY_FOR_HUMAN_CHECK`.
 - `F5`: human `Ship it` release train: exact main rebuild, deploy, smoke, rollback. JARVIS auto-deploy is intentionally absent during Factory development.
 
+## Control Plane
+
+```sh
+factoryv2 init --root ~/.factoryv2
+factoryv2 goal "Fix the bounded issue" --repo /path/to/repo --root ~/.factoryv2
+factoryv2 run --engine claude --root ~/.factoryv2
+factoryv2 channel list --root ~/.factoryv2
+factoryv2 channel send kaylas-store "Investigate yesterday's refund spike" --root ~/.factoryv2
+factoryv2 daemon install --engine claude --root ~/.factoryv2
+```
+
+`factoryd` is a headless launchd worker. Its only operator notification classes are `READY_FOR_HUMAN_CHECK`, `HUMAN_DECISION_REQUIRED`, `BLOCKED_EXTERNAL`, and `SHIPPED`.
+
+The daemon also owns a mode-`0600` Unix-socket API at `<state-root>/daemon/channel-api.sock`. Its allowlist is limited to `channel.list`, `channel.send`, `channel.status`, `channel.result`, `channel.cancel`, and `channel.resume`; see [docs/CHANNEL_API.md](docs/CHANNEL_API.md). Business channels require explicitly configured, identity-marked project roots and remain unavailable when those roots are absent.
+
 ## Local proof
 
 ```sh
 npm test
 ```
 
-The proof uses real temporary git repositories and deterministic fake agents. It demonstrates a controlled bug, verifier failure handling, independent reviewer rejection, same-worker repair, Factory restart/resume, and no merge to main.
+The suite separates process-protocol proofs from live-provider acceptance. It uses real subprocess fixtures for adapter/session/restart behavior, temporary git repositories for deterministic controller gates, and fake agents only where a controlled rejection or interruption is the subject under test.
 
 ## Production-hardening proofs
 
@@ -28,4 +43,7 @@ The current suite also proves:
 - reports derive from the journal and cannot be forced to summarize failed gates as passing;
 - protected authority goals surface as `HUMAN_DECISION_REQUIRED`;
 - compact operator commands exist for status, inspection, pause/resume, decisions, human acceptance/rejection, candidate lookup, and ship-it recording.
-- `factoryv2 audit` reports A-Q production acceptance status.
+- `factoryv2 audit` reports dynamic A-I control-plane status from implementation and journal evidence. It does not label fixture-only behavior as live proof.
+- channel task envelopes are bounded, caller job IDs are durable/idempotent, and provider outages preserve work while deterministic jobs continue;
+- session search is rebuildable SQLite FTS with timestamp/channel/session/job provenance;
+- skill improvements remain inactive proposals until existing authority gates permit activation.
