@@ -32,7 +32,7 @@ function createChannelRegistry({ root, adapterFactory = (config) => createAdapte
         continue;
       }
       const patch = Object.fromEntries(DEFINITION_FIELDS.filter((field) => JSON.stringify(existing[field]) !== JSON.stringify(normalized[field])).map((field) => [field, normalized[field]]));
-      if (normalized.state === "unavailable" && !["working", "waiting_provider", "paused"].includes(existing.state)) patch.state = "unavailable";
+      if (normalized.state === "unavailable" && existing.state !== "unavailable" && !["working", "waiting_provider", "paused"].includes(existing.state)) patch.state = "unavailable";
       if (normalized.state === "idle" && existing.state === "unavailable") patch.state = "idle";
       if (existing.identityKey && existing.identityKey !== normalized.identityKey && existing.sessionId) {
         journal.append(root, { type: "channel.identity.changed", channelId: definition.id, from: existing.identityKey, to: normalized.identityKey });
@@ -240,7 +240,13 @@ function validateProject(channel) {
   if (!channel.cwd) return { ok: false, code: "CHANNEL_CWD_MISSING", reason: "channel cwd is not configured" };
   if (!fs.existsSync(channel.cwd) || !fs.statSync(channel.cwd).isDirectory()) return { ok: false, code: "CHANNEL_CWD_MISSING", reason: `channel cwd does not exist: ${channel.cwd}` };
   const identity = channel.projectIdentity || {};
-  if (identity.marker && !fs.existsSync(path.join(channel.cwd, identity.marker))) return { ok: false, code: "CHANNEL_PROJECT_MISMATCH", reason: `project marker missing: ${identity.marker}` };
+  const markerPath = identity.marker ? path.join(channel.cwd, identity.marker) : null;
+  if (markerPath && !fs.existsSync(markerPath)) return { ok: false, code: "CHANNEL_PROJECT_MISMATCH", reason: `project marker missing: ${identity.marker}` };
+  if (identity.markerContains) {
+    if (!markerPath || !fs.statSync(markerPath).isFile()) return { ok: false, code: "CHANNEL_PROJECT_MISMATCH", reason: "content-bound project identity needs a marker file" };
+    const marker = fs.readFileSync(markerPath, "utf8");
+    if (!marker.includes(identity.markerContains)) return { ok: false, code: "CHANNEL_PROJECT_MISMATCH", reason: `project marker content does not match: ${identity.marker}` };
+  }
   if (identity.gitRemote) {
     const result = spawnSync("git", ["config", "--get", "remote.origin.url"], { cwd: channel.cwd, encoding: "utf8" });
     if (result.status !== 0 || !String(result.stdout).includes(identity.gitRemote)) return { ok: false, code: "CHANNEL_PROJECT_MISMATCH", reason: `git remote does not match ${identity.gitRemote}` };

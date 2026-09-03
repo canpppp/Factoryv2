@@ -7,16 +7,21 @@ const { spawnSync } = require("node:child_process");
 
 const LABEL = "com.can.factoryv2";
 
-function plist({ root, node = process.execPath, daemonPath = path.join(__dirname, "../bin/factoryd.js"), engine = "claude", pollMs = 5000 }) {
+function plist({ root, node = process.execPath, daemonPath = path.join(__dirname, "../bin/factoryd.js"), engine = "claude", pollMs = 5000, channelRoots = {} }) {
   const args = [node, daemonPath, "--root", path.resolve(root), "--engine", engine, "--poll-ms", String(pollMs)];
   const toolPath = [path.join(os.homedir(), ".local/bin"), "/Applications/ChatGPT.app/Contents/Resources", "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"].join(":");
+  const rootEnv = Object.entries(channelRoots)
+    .filter(([key, value]) => /^FACTORYV2_[A-Z0-9_]+_CWD$/.test(key) && typeof value === "string" && value.trim())
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([key, value]) => `<key>${xml(key)}</key><string>${xml(path.resolve(value))}</string>`)
+    .join("");
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
 <key>Label</key><string>${LABEL}</string>
 <key>ProgramArguments</key><array>${args.map((arg) => `<string>${xml(arg)}</string>`).join("")}</array>
 <key>RunAtLoad</key><true/><key>KeepAlive</key><true/>
-<key>EnvironmentVariables</key><dict><key>PATH</key><string>${xml(toolPath)}</string><key>FACTORYV2_HOME</key><string>${xml(path.resolve(root))}</string></dict>
+<key>EnvironmentVariables</key><dict><key>PATH</key><string>${xml(toolPath)}</string><key>FACTORYV2_HOME</key><string>${xml(path.resolve(root))}</string>${rootEnv}</dict>
 <key>StandardOutPath</key><string>${xml(path.join(path.resolve(root), "daemon/factoryd.stdout.log"))}</string>
 <key>StandardErrorPath</key><string>${xml(path.join(path.resolve(root), "daemon/factoryd.stderr.log"))}</string>
 <key>ProcessType</key><string>Background</string>

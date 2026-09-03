@@ -165,7 +165,12 @@ async function main() {
     return;
   }
   if (cmd === "daemon" && pos[1] === "install") {
-    const file = installLaunchd({ root, engine: flag("engine", process.env.FACTORYV2_ENGINE || "claude") });
+    const definitions = JSON.parse(fs.readFileSync(path.join(__dirname, "../config/channels.json"), "utf8"));
+    const channelRoots = Object.fromEntries(definitions
+      .map((definition) => definition.cwdEnv)
+      .filter((key) => key && process.env[key])
+      .map((key) => [key, process.env[key]]));
+    const file = installLaunchd({ root, engine: flag("engine", process.env.FACTORYV2_ENGINE || "claude"), channelRoots });
     console.log(`installed ${file}`);
     return;
   }
