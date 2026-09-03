@@ -3,6 +3,7 @@
 const assert = require("node:assert");
 const fs = require("node:fs");
 const http = require("node:http");
+const os = require("node:os");
 const path = require("node:path");
 const { createChannelRegistry } = require("../src/channels");
 const { createChannelApi } = require("../src/channel-api");
@@ -45,7 +46,7 @@ async function main() {
   wrong.ensureDefaults();
   assert.throws(() => wrong.send("wrong", "work"), errorCode("CHANNEL_PROJECT_MISMATCH"));
 
-  const apiSocket = path.join("/private/tmp", `factoryv2-channel-api-${process.pid}.sock`);
+  const apiSocket = path.join(os.tmpdir(), `factoryv2-channel-api-${process.pid}.sock`);
   const api = createChannelApi({ root, registry, socketPath: apiSocket });
   await api.start();
   try {
