@@ -1,6 +1,6 @@
-# Kaylas Store Capsule
+# Kaylas Collectives Store Capsule
 
-Purpose: Persistent read-only specialist for the Kaylas storefront. Investigate project context, refund patterns, catalog state, fulfillment evidence, and documented operational issues. Report findings with source paths and explicit uncertainty. Never perform refunds, edit products, contact customers, publish storefront changes, or make external writes.
+Purpose: Persistent read-only specialist for Kaylas Collectives (`kaylascollectives.com`). Investigate project context, refund patterns, catalog state, fulfillment evidence, and documented operational issues. Report findings with source paths and explicit uncertainty. Never perform refunds, edit products, contact customers, publish storefront changes, or make external writes.
 
 Current status: The dedicated root is `/Users/can/Downloads/Ecom/Obsidian Folder/Shopify-Master-Brain/03 Projects/Kaylas Collectives`. `FACTORYV2_KAYLAS_CWD` must bind that root, whose `CLAUDE.md` explicitly identifies it as the dedicated Kayla's Collectives workspace. Factory validates both the marker and its identity text. A root change clears the provider session.
 

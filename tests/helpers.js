@@ -82,9 +82,10 @@ function makeJarvisDocsTestRepo(source) {
 function makeChannelDefinitions() {
   const dir = tmp("factoryv2-channel-project-");
   fs.writeFileSync(path.join(dir, ".factory-channel.json"), JSON.stringify({ version: 1 }));
-  const ids = ["kaylas-store", "store-two", "quality-check", "facebook-product-launches", "invoice-audit", "jarvis-development"];
+  const ids = ["kaylas-store", "esmebelle-store", "quality-check", "facebook-product-launches", "invoice-audit", "jarvis-development"];
   const definitions = ids.map((id) => ({
     id,
+    aliases: id === "esmebelle-store" ? ["store-two"] : [],
     name: id,
     cwd: dir,
     engine: ["quality-check", "invoice-audit", "jarvis-development"].includes(id) ? "codex" : "claude",

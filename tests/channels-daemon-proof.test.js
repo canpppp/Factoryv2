@@ -21,6 +21,8 @@ async function main() {
   const fixtureConfig = H.makeChannelDefinitions();
   const registry = createChannelRegistry({ root, adapterFactory, definitionsPath: fixtureConfig.definitionsPath });
   assert.strictEqual(registry.ensureDefaults().length, 6);
+  assert.strictEqual(registry.status("store-two").id, "esmebelle-store");
+  assert.ok(!registry.list().some((channel) => channel.id === "store-two"));
 
   registry.send("kaylas-store", "Investigate yesterday's refund spike.");
   await registry.runNext();
@@ -51,6 +53,7 @@ async function main() {
 
   restarted.send("store-two", "Queue then cancel this read-only job.");
   const cancelled = await tools["channel.cancel"]({ channelId: "store-two" });
+  assert.strictEqual(cancelled.id, "esmebelle-store");
   assert.strictEqual(cancelled.operation.accepted, true);
   assert.strictEqual(cancelled.operation.changed, true);
   assert.ok(cancelled.operation.jobId);

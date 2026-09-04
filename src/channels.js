@@ -14,17 +14,37 @@ const deterministic = require("./deterministic");
 const { compileTask } = require("./task-compiler");
 
 const RECOVERABLE = new Set(["PROVIDER_QUOTA", "TIMEOUT", "AUTH_REQUIRED", "AGENT_FAILED"]);
-const DEFINITION_FIELDS = ["name", "cwd", "engine", "modelPolicy", "allowedTools", "readWriteProfile", "writeAuthority", "projectIdentity", "capsule", "capsulePath", "definitionVersion", "identityKey", "unavailableReason"];
+const DEFINITION_FIELDS = ["name", "aliases", "cwd", "engine", "modelPolicy", "allowedTools", "readWriteProfile", "writeAuthority", "projectIdentity", "capsule", "capsulePath", "definitionVersion", "identityKey", "unavailableReason"];
 
 function createChannelRegistry({ root, adapterFactory = (config) => createAdapter(config), definitionsPath } = {}) {
   if (!root) throw new Error("channel registry needs root");
   const active = new Map();
   const configPath = definitionsPath || path.join(__dirname, "../config/channels.json");
 
+  function definitions() {
+    return JSON.parse(fs.readFileSync(configPath, "utf8"));
+  }
+
+  function aliasMap() {
+    const aliases = new Map();
+    const configured = definitions();
+    const ids = new Set(configured.map((definition) => definition.id));
+    for (const definition of configured) {
+      for (const alias of definition.aliases || []) {
+        if (aliases.has(alias) || ids.has(alias)) throw new Error(`duplicate channel alias: ${alias}`);
+        aliases.set(alias, definition.id);
+      }
+    }
+    return aliases;
+  }
+
+  function resolveChannelId(channelId) {
+    return aliasMap().get(channelId) || channelId;
+  }
+
   function ensureDefaults() {
     const state = journal.load(root);
-    const definitions = JSON.parse(fs.readFileSync(configPath, "utf8"));
-    for (const definition of definitions) {
+    for (const definition of definitions()) {
       const normalized = normalizeDefinition(definition, path.dirname(configPath));
       const existing = state.channels.get(definition.id);
       if (!existing) {
@@ -44,11 +64,13 @@ function createChannelRegistry({ root, adapterFactory = (config) => createAdapte
   }
 
   function list() {
-    return [...journal.load(root).channels.values()];
+    const legacyAliases = new Set(aliasMap().keys());
+    return [...journal.load(root).channels.values()].filter((channel) => !legacyAliases.has(channel.id));
   }
 
   function status(channelId) {
-    const channel = journal.load(root).channels.get(channelId);
+    const canonicalId = resolveChannelId(channelId);
+    const channel = journal.load(root).channels.get(canonicalId);
     if (!channel) throw new Error(`unknown channel: ${channelId}`);
     return channel;
   }
@@ -59,6 +81,7 @@ function createChannelRegistry({ root, adapterFactory = (config) => createAdapte
 
   function send(channelId, prompt, options = {}) {
     const channel = status(channelId);
+    channelId = channel.id;
     const envelope = compileTask(channel, { ...options, prompt });
     const check = validateChannel(channel, envelope);
     if (!check.ok) throw channelError(check.reason, check.code);
@@ -72,6 +95,7 @@ function createChannelRegistry({ root, adapterFactory = (config) => createAdapte
 
   function pause(channelId) {
     const channel = status(channelId);
+    channelId = channel.id;
     const check = validateChannel(channel, { readWriteBoundary: "read-only", requestedTools: [] });
     if (!check.ok) throw channelError(check.reason, check.code);
     const runner = active.get(channelId);
@@ -85,6 +109,7 @@ function createChannelRegistry({ root, adapterFactory = (config) => createAdapte
 
   function resume(channelId) {
     const channel = status(channelId);
+    channelId = channel.id;
     const check = validateChannel(channel, { readWriteBoundary: "read-only", requestedTools: [] });
     if (!check.ok) throw channelError(check.reason, check.code);
     journal.append(root, { type: "channel.resumed", channelId });
@@ -93,6 +118,7 @@ function createChannelRegistry({ root, adapterFactory = (config) => createAdapte
 
   function cancel(channelId) {
     const channel = status(channelId);
+    channelId = channel.id;
     const runner = active.get(channelId);
     if (runner) {
       runner.action = "cancel";
@@ -107,12 +133,13 @@ function createChannelRegistry({ root, adapterFactory = (config) => createAdapte
     return lease.withLease(root, async () => {
       ensureDefaults();
       const state = journal.load(root);
+      const legacyAliases = new Set(aliasMap().keys());
       const channel = [...state.channels.values()].find((item) => {
         const job = item.currentJob || item.queue[0];
         const backoff = state.providerBackoffs.get(item.engine);
-        return item.state !== "paused" && job && (deterministic.canRun(job) || !backoff || Date.parse(backoff.until) <= Date.now());
+        return !legacyAliases.has(item.id) && item.state !== "paused" && job && (deterministic.canRun(job) || !backoff || Date.parse(backoff.until) <= Date.now());
       });
-      if (!channel) return { progressed: false, summary: [...state.channels.values()].some((item) => item.currentJob || item.queue.length) ? "channels backed off" : "channels idle" };
+      if (!channel) return { progressed: false, summary: [...state.channels.values()].some((item) => !legacyAliases.has(item.id) && (item.currentJob || item.queue.length)) ? "channels backed off" : "channels idle" };
       const job = channel.currentJob || channel.queue[0];
       const check = validateChannel(channel, job.envelope || { readWriteBoundary: "read-only", requestedTools: [] });
       if (!check.ok) {
@@ -194,7 +221,7 @@ function createChannelRegistry({ root, adapterFactory = (config) => createAdapte
     });
   }
 
-  return { ensureDefaults, list, status, result, send, pause, resume, cancel, runNext };
+  return { ensureDefaults, list, status, result, send, pause, resume, cancel, runNext, resolveChannelId };
 }
 
 function normalizeDefinition(definition, configDir = path.join(__dirname, "../config")) {
@@ -204,6 +231,7 @@ function normalizeDefinition(definition, configDir = path.join(__dirname, "../co
   const capsule = capsulePath && fs.existsSync(capsulePath) ? fs.readFileSync(capsulePath, "utf8").trim() : String(definition.capsule || "").trim();
   const base = {
     ...definition,
+    aliases: definition.aliases || [],
     cwd,
     sessionId: null,
     modelPolicy: definition.modelPolicy || { kind: "implementation" },
