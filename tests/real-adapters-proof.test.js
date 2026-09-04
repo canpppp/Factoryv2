@@ -3,7 +3,7 @@
 const assert = require("node:assert");
 const path = require("node:path");
 const { createClaudeAdapter } = require("../src/adapters/claude");
-const { createCodexAdapter } = require("../src/adapters/codex");
+const { createCodexAdapter, buildArgs } = require("../src/adapters/codex");
 
 const fixture = path.join(__dirname, "fixtures/agent-cli.js");
 
@@ -37,6 +37,7 @@ async function proveClaude() {
 }
 
 async function proveCodex() {
+  assert.ok(buildArgs({ cwd: "/validated/non-git", readOnly: true }).includes("--skip-git-repo-check"));
   const adapter = createCodexAdapter({ command: fixture, model: "test-model" });
   let captured;
   const first = await adapter.startThread({ cwd: __dirname, readOnly: false }).run("first", {
