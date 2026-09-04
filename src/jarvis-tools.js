@@ -17,8 +17,21 @@ function createChannelTools(registry) {
     }),
     "channel.status": async ({ channelId }) => summary(registry.status(channelId)),
     "channel.result": async ({ channelId }) => registry.result(channelId),
-    "channel.cancel": async ({ channelId }) => summary(registry.cancel(channelId)),
-    "channel.resume": async ({ channelId }) => summary(registry.resume(channelId))
+    "channel.cancel": async ({ channelId }) => controlReceipt(registry, channelId, "cancel"),
+    "channel.resume": async ({ channelId }) => controlReceipt(registry, channelId, "resume")
+  };
+}
+
+function controlReceipt(registry, channelId, action) {
+  const before = registry.status(channelId);
+  const jobId = before.currentJob?.id || before.queue?.[0]?.id || null;
+  const changed = action === "cancel"
+    ? !!(before.currentJob || before.queue?.length)
+    : before.state === "paused";
+  const after = registry[action](channelId);
+  return {
+    ...summary(after),
+    operation: { action, accepted: true, changed, jobId }
   };
 }
 
@@ -38,4 +51,4 @@ function summary(channel) {
   };
 }
 
-module.exports = { createChannelTools, summary };
+module.exports = { createChannelTools, summary, controlReceipt };
