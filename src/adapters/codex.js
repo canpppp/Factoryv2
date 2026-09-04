@@ -59,7 +59,7 @@ function createCodexAdapter(config = {}) {
 function buildArgs(options) {
   const sandbox = options.readOnly ? "read-only" : "workspace-write";
   const global = ["--sandbox", sandbox, "--ask-for-approval", "never", "--cd", options.cwd];
-  const common = ["--json"];
+  const common = ["--json", "--skip-git-repo-check"];
   if (options.model) common.push("--model", options.model);
   if (options.threadId) return [...global, "exec", "resume", ...common, options.threadId, "-"];
   return [...global, "exec", ...common, "-"];
