@@ -49,6 +49,19 @@ async function main() {
   await restarted.runNext();
   assert.strictEqual((await tools["channel.result"]({ channelId: "facebook-product-launches" })).ok, true);
 
+  restarted.send("store-two", "Queue then cancel this read-only job.");
+  const cancelled = await tools["channel.cancel"]({ channelId: "store-two" });
+  assert.strictEqual(cancelled.operation.accepted, true);
+  assert.strictEqual(cancelled.operation.changed, true);
+  assert.ok(cancelled.operation.jobId);
+  const noOpCancel = await tools["channel.cancel"]({ channelId: "store-two" });
+  assert.strictEqual(noOpCancel.operation.changed, false);
+
+  restarted.pause("kaylas-store");
+  const resumed = await tools["channel.resume"]({ channelId: "kaylas-store" });
+  assert.strictEqual(resumed.operation.changed, true);
+  assert.strictEqual(resumed.operation.action, "resume");
+
   const usage = journal.load(root).events.filter((event) => event.type === "token.usage");
   assert.ok(usage.length >= 4);
   assert.ok(usage.some((event) => event.reusedSession === true));
