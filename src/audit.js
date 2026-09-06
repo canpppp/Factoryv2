@@ -26,7 +26,7 @@ function productionAudit(root) {
     item("E", "JARVIS dispatch and result retrieval", dispatch ? "live-proved" : "implemented"),
     item("F", "compact goal and selective skills", primedContext ? "live-proved" : (fs.existsSync(path.join(sourceRoot, "skills/index.json")) ? "protocol-proved" : "failed")),
     item("G", "token governor evidence", tokenReceipt ? "live-proved" : "implemented"),
-    item("H", "quota backoff and deterministic continuation", quota && deterministic ? "live-proved" : "implemented"),
+    item("H", "quota backoff and deterministic continuation", quota ? "live-proved" : "implemented"),
     item("I", "concise operator-only result", "implemented")
   ];
 }
@@ -34,29 +34,30 @@ function productionAudit(root) {
 function item(id, title, status) { return { id, title, status }; }
 
 function liveReceipt(events, event) {
-  if (event.type !== "agent.receipt" || event.origin === "fixture") return false;
+  if (event.type !== "agent.receipt" || !trustedOrigin(event)) return false;
   return !!(event.channelId && event.jobId && event.sessionId && event.engine)
-    && events.some((candidate) => candidate.type === "channel.job.finished" && candidate.channelId === event.channelId && candidate.jobId === event.jobId && candidate.result?.verified);
+    && events.some((candidate) => trustedOrigin(candidate) && candidate.type === "channel.job.finished" && candidate.channelId === event.channelId && candidate.jobId === event.jobId && candidate.result?.verified);
 }
 
 function controllerSurvival(events, event) {
-  if (event.type !== "controller.stopped" || !event.scenarioId) return false;
-  return events.some((candidate) => candidate.type === "channel.job.finished" && candidate.scenarioId === event.scenarioId && candidate.result?.verified);
+  if (event.type !== "controller.stopped" || !event.scenarioId || !trustedOrigin(event)) return false;
+  return events.some((candidate) => trustedOrigin(candidate) && candidate.type === "channel.job.finished" && candidate.scenarioId === event.scenarioId && candidate.result?.verified);
 }
 
 function resumedSession(events, event) {
-  if (event.type !== "token.usage" || !event.reusedSession || event.origin === "fixture") return false;
+  if (event.type !== "token.usage" || !event.reusedSession || !trustedOrigin(event)) return false;
   const [, channelId, jobId] = String(event.scope || "").split(":");
-  return !!(channelId && jobId) && events.some((candidate) => candidate.type === "agent.receipt" && candidate.channelId === channelId && candidate.jobId === jobId && candidate.sessionId);
+  return !!(channelId && jobId) && events.some((candidate) => trustedOrigin(candidate) && candidate.type === "agent.receipt" && candidate.channelId === channelId && candidate.jobId === jobId && candidate.sessionId);
 }
 
 function dispatchRetrieved(events, event) {
-  if (event.type !== "channel.result.retrieved" || !event.channelId || !event.jobId || !event.ok || !event.verified) return false;
+  if (event.type !== "channel.result.retrieved" || !event.channelId || !event.jobId || !event.ok || !event.verified || !trustedOrigin(event)) return false;
   const retrievedAt = Date.parse(event.at || "");
-  return events.some((candidate) => candidate.type === "channel.job.queued" && candidate.channelId === event.channelId && candidate.job?.id === event.jobId)
+  return events.some((candidate) => trustedOrigin(candidate) && candidate.type === "channel.job.queued" && candidate.channelId === event.channelId && candidate.job?.id === event.jobId)
     && events.some((candidate) => {
       const finishedAt = Date.parse(candidate.at || "");
-      return candidate.type === "channel.job.finished"
+      return trustedOrigin(candidate)
+        && candidate.type === "channel.job.finished"
         && candidate.channelId === event.channelId
         && candidate.jobId === event.jobId
         && candidate.result?.verified
@@ -67,7 +68,8 @@ function dispatchRetrieved(events, event) {
 }
 
 function contextResolved(event) {
-  return event.type === "channel.context.resolved"
+  return trustedOrigin(event)
+    && event.type === "channel.context.resolved"
     && event.manifest?.sha256
     && Array.isArray(event.manifest.refs)
     && event.manifest.refs.some((ref) => ref.kind !== "fixture" && ref.sha256 && Number.isInteger(ref.bytes));
@@ -75,15 +77,19 @@ function contextResolved(event) {
 
 function tokenEvidence(event) {
   return event.type === "token.usage"
-    && event.origin !== "fixture"
+    && trustedOrigin(event)
     && /^channel:[^:]+:[^:]+$/.test(String(event.scope || ""))
     && Object.hasOwn(event, "promptContextEstimate")
     && Object.hasOwn(event, "cacheReadTokens");
 }
 
 function quotaContinuation(events, event) {
-  if (event.type !== "provider.backoff.scheduled" || !event.scenarioId) return false;
-  return events.some((candidate) => candidate.type === "deterministic.continuation" && candidate.scenarioId === event.scenarioId && candidate.channelId && candidate.jobId);
+  if (event.type !== "provider.backoff.scheduled" || !event.scenarioId || !trustedOrigin(event)) return false;
+  return events.some((candidate) => trustedOrigin(candidate) && candidate.type === "deterministic.continuation" && candidate.scenarioId === event.scenarioId && candidate.channelId && candidate.jobId);
+}
+
+function trustedOrigin(event) {
+  return !!event && event.origin !== "fixture";
 }
 
 function renderProductionAudit(root) {

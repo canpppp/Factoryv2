@@ -45,8 +45,12 @@ async function main() {
 
   await contextFailure(fixture.definitionsPath, "private:session", "CONTEXT_PRIVACY_DENIED");
   await contextFailure(fixture.definitionsPath, "project:wrong-store", "CONTEXT_FOREIGN_SCOPE");
+  await contextFailure(fixture.definitionsPath, "project-memory:esmebelle", "CONTEXT_FOREIGN_SCOPE");
   await contextFailure(fixture.definitionsPath, "stale:rules", "CONTEXT_STALE");
+  await contextFailure(fixture.definitionsPath, "skill:missing-sop", "CONTEXT_MISSING");
+  await contextFailure(fixture.definitionsPath, "made-up:required", "CONTEXT_UNKNOWN_REF");
   await contextFailure(fixture.definitionsPath, "file:missing.md", "CONTEXT_MISSING");
+  await requiredRefFailure(fixture.definitionsPath);
   fs.writeFileSync(path.join(fixture.dir, "large.md"), "é".repeat(9000));
   await contextFailure(fixture.definitionsPath, "file:large.md", "CONTEXT_TOO_LARGE");
   fs.writeFileSync(path.join(fixture.dir, "outside.md"), "outside\n");
@@ -61,7 +65,9 @@ async function main() {
   await workerFailure(fixture.definitionsPath, (ids) => JSON.stringify({ done: true, jobId: ids.jobId, summary: "missing channel", evidence: ["proof"], contextManifestSha256: ids.manifestSha }), "CHANNEL_ID_MISSING");
   await workerFailure(fixture.definitionsPath, (ids) => JSON.stringify({ done: true, channelId: ids.channelId, summary: "missing job", evidence: ["proof"], contextManifestSha256: ids.manifestSha }), "JOB_ID_MISSING");
   await workerFailure(fixture.definitionsPath, (ids) => JSON.stringify({ done: true, channelId: ids.channelId, jobId: "other-job", summary: "wrong", evidence: ["proof"], contextManifestSha256: ids.manifestSha }), "WRONG_JOB");
-  await workerFailure(fixture.definitionsPath, (ids) => JSON.stringify({ done: true, channelId: ids.channelId, jobId: ids.jobId, summary: "missing evidence", evidence: [], contextManifestSha256: ids.manifestSha }), "EVIDENCE_MISSING");
+  await workerFailure(fixture.definitionsPath, (ids) => JSON.stringify({ done: true, channelId: ids.channelId, jobId: ids.jobId, summary: "completed analysis", evidence: [], contextManifestSha256: ids.manifestSha }), "EVIDENCE_MISSING");
+  await workerFailure(fixture.definitionsPath, (ids) => JSON.stringify({ done: true, channelId: ids.channelId, jobId: ids.jobId, summary: "created report", evidence: ["file:missing-report.txt"], contextManifestSha256: ids.manifestSha }), "EVIDENCE_UNSUPPORTED", { evidenceRequired: ["file:missing-report.txt"] });
+  await workerFailure(fixture.definitionsPath, (ids) => JSON.stringify({ done: true, channelId: ids.channelId, jobId: ids.jobId, summary: "I cannot access the source or create the required report.", evidence: ["proof"], contextManifestSha256: ids.manifestSha }), "OBJECTIVE_UNVERIFIED");
   await workerFailure(fixture.definitionsPath, (ids) => JSON.stringify({ done: true, channelId: ids.channelId, jobId: ids.jobId, summary: "refused", evidence: ["proof"], refusal: true, contextManifestSha256: ids.manifestSha }), "WORKER_UNAVAILABLE");
 
   const badPath = path.join(fixture.dir, "bad-channels.json");
@@ -172,7 +178,7 @@ async function contextFailure(definitionsPath, ref, code) {
   assert.strictEqual(registry.result("kaylas-store", `job-${code}`).code, code);
 }
 
-async function workerFailure(definitionsPath, responseFor, code) {
+async function workerFailure(definitionsPath, responseFor, code, options = {}) {
   const root = H.tmp(`factoryv2-worker-${code}-`);
   const adapter = {
     startThread: () => ({
@@ -195,10 +201,18 @@ async function workerFailure(definitionsPath, responseFor, code) {
   };
   const registry = createChannelRegistry({ root, definitionsPath, adapterFactory: () => adapter });
   registry.ensureDefaults();
-  registry.send("kaylas-store", `worker failure ${code}`, { jobId: `worker-${code}`, evidenceRequired: ["proof"] });
+  registry.send("kaylas-store", `worker failure ${code}`, { jobId: `worker-${code}`, evidenceRequired: options.evidenceRequired || ["proof"] });
   const run = await registry.runNext();
   assert.strictEqual(run.result.code, code);
   assert.strictEqual(registry.result("kaylas-store", `worker-${code}`).code, code);
+}
+
+async function requiredRefFailure(definitionsPath) {
+  const registry = createChannelRegistry({ root: H.tmp("factoryv2-required-ref-"), definitionsPath });
+  registry.ensureDefaults();
+  registry.send("kaylas-store", "required ref must resolve", { jobId: "required-ref-job", primingRefs: ["capsule"], requiredRefs: ["file:missing.txt"] });
+  const run = await registry.runNext();
+  assert.strictEqual(run.result.code, "CONTEXT_MISSING");
 }
 
 async function sessionPathCannotEscape(definitionsPath) {

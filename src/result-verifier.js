@@ -13,10 +13,16 @@ function verifyWorkerResult({ channelId, job, receipt, contextManifest = null } 
   if (value.done !== true) return fail("OBJECTIVE_UNVERIFIED", "worker did not mark the objective done");
   const summary = clean(value.summary || value.finding, 1000);
   if (!summary) return fail("SUMMARY_MISSING", "verified completion requires a summary");
+  if (/\b(?:cannot|can't|unable to|unavailable|missing|not access|no access|could not)\b/i.test(summary)) {
+    return fail("OBJECTIVE_UNVERIFIED", "worker summary reports unavailable or incomplete work");
+  }
   const evidence = Array.isArray(value.evidence) ? value.evidence.map((item) => clean(item.ref || item, 240)).filter(Boolean) : [];
   const required = Array.isArray(job.envelope?.evidenceRequired) ? job.envelope.evidenceRequired : [];
   const missing = required.filter((ref) => !evidence.includes(ref));
   if (missing.length) return fail("EVIDENCE_MISSING", "worker result is missing required evidence", { missing });
+  const manifestRefs = new Set((contextManifest?.refs || []).map((ref) => ref.ref));
+  const unsupportedFiles = required.filter((ref) => /^file:/i.test(ref) && !manifestRefs.has(ref));
+  if (unsupportedFiles.length) return fail("EVIDENCE_UNSUPPORTED", "file evidence must be resolved in the context manifest", { unsupported: unsupportedFiles });
   if (contextManifest && !value.contextManifestSha256) return fail("CONTEXT_MANIFEST_UNACKED", "worker did not acknowledge resolved context manifest");
   if (contextManifest && value.contextManifestSha256 !== contextManifest.sha256) {
     return fail("CONTEXT_MANIFEST_MISMATCH", "worker acknowledged a different context manifest");

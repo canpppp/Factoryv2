@@ -8,7 +8,7 @@ const MAX_REQUIRED_BYTES = 64 * 1024;
 const MAX_OPTIONAL_BYTES = 16 * 1024;
 
 function resolveContext(channel, envelope = {}) {
-  const required = [...(envelope.primingRefs || []), ...(envelope.contextRefs || [])]
+  const required = [...(envelope.primingRefs || []), ...(envelope.contextRefs || []), ...(envelope.requiredRefs || [])]
     .filter((ref, index, all) => ref && all.indexOf(ref) === index);
   const resolved = [];
   const omitted = [];
@@ -48,15 +48,16 @@ function resolveRef(channel, ref, envelope = {}) {
     if (wanted !== expected && wanted !== channel.id) return fail("CONTEXT_FOREIGN_SCOPE", "project ref belongs to another channel");
     return source(value, "project", channel.capsule || "", `channel-definition:${channel.definitionVersion || 1}`);
   }
-  if (/^skill:/i.test(value) || /^active-priorities:/i.test(value) || /^source:/i.test(value)) {
-    return source(value, "reference", `${value}\n${channel.capsule || ""}`, `channel-definition:${channel.definitionVersion || 1}`);
-  }
+  if (/^project-memory:/i.test(value)) return resolveProjectMemory(channel, value);
+  if (/^skill:/i.test(value)) return resolveSkill(value);
+  if (/^active-priorities:/i.test(value)) return fail("CONTEXT_MISSING", "active priorities ref is not available in this channel scope");
+  if (/^source:/i.test(value)) return resolveFile(channel, value.slice(7), envelope);
   if (value === "capsule" || value === `capsule:${channel.id}` || value === `sop:${channel.id}`) {
     return source(value, "sop", channel.capsule || "", `channel-definition:${channel.definitionVersion || 1}`);
   }
   if (/^file:/i.test(value)) return resolveFile(channel, value.slice(5), envelope);
   if (/^fixture:/i.test(value)) return source(value, "fixture", value, "synthetic-fixture");
-  return source(value, "reference", `${value}\n${channel.capsule || ""}`, `channel-definition:${channel.definitionVersion || 1}`);
+  return fail("CONTEXT_UNKNOWN_REF", "context ref is not a recognized scoped source");
 }
 
 function resolveFile(channel, relative, envelope = {}) {
@@ -80,6 +81,32 @@ function resolveFile(channel, relative, envelope = {}) {
     if (error.code === "ENOENT") return fail("CONTEXT_MISSING", "required context ref is missing");
     if (error.code === "EACCES" || error.code === "EPERM") return fail("CONTEXT_PERMISSION_DENIED", "context ref is unreadable");
     if (error.code === "ERR_INVALID_ARG_TYPE") return fail("CONTEXT_ENCODING_UNSUPPORTED", "context ref must be UTF-8 text");
+    throw error;
+  }
+}
+
+function resolveProjectMemory(channel, value) {
+  const wanted = value.split(":").slice(1).join(":");
+  const expected = projectKey(channel.id);
+  if (wanted !== expected && wanted !== channel.id) return fail("CONTEXT_FOREIGN_SCOPE", "project memory ref belongs to another channel");
+  return fail("CONTEXT_MISSING", "project memory ref is not available in this channel scope");
+}
+
+function resolveSkill(value) {
+  const name = value.split(":").slice(1).join(":");
+  if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,80}$/.test(name)) return fail("CONTEXT_UNKNOWN_REF", "skill ref is invalid");
+  const root = path.join(__dirname, "..", "skills");
+  const indexPath = path.join(root, "index.json");
+  let index;
+  try { index = JSON.parse(fs.readFileSync(indexPath, "utf8")); }
+  catch { return fail("CONTEXT_MISSING", "skills index is unavailable"); }
+  const entry = Array.isArray(index) ? index.find((item) => item.name === name) : null;
+  if (!entry) return fail("CONTEXT_MISSING", "skill ref is missing from the skills index");
+  const skillPath = path.join(root, name, "SKILL.md");
+  try {
+    return source(value, "skill", fs.readFileSync(skillPath, "utf8"), `skill:${entry.version || 1}`);
+  } catch (error) {
+    if (error.code === "ENOENT") return fail("CONTEXT_MISSING", "skill instruction file is missing");
     throw error;
   }
 }

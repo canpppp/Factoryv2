@@ -30,6 +30,20 @@ function main() {
   const falseGreen = audit.productionAudit(unrelated).filter((item) => "ABCEGH".includes(item.id) && item.status === "live-proved");
   assert.deepStrictEqual(falseGreen, []);
 
+  const fixtureOnly = H.tmp("factoryv2-audit-fixture-only-");
+  journal.append(fixtureOnly, { type: "channel.job.queued", channelId: "jarvis-development", job: { id: "job-fixture" }, origin: "fixture" });
+  journal.append(fixtureOnly, { type: "channel.context.resolved", channelId: "jarvis-development", jobId: "job-fixture", origin: "fixture", manifest: { sha256: "a".repeat(64), refs: [{ ref: "capsule", kind: "sop", sha256: "b".repeat(64), bytes: 12 }] } });
+  journal.append(fixtureOnly, { type: "channel.job.finished", channelId: "jarvis-development", jobId: "job-fixture", result: { ok: true, verified: true }, origin: "fixture" });
+  journal.append(fixtureOnly, { type: "channel.result.retrieved", channelId: "jarvis-development", jobId: "job-fixture", ok: true, verified: true, origin: "fixture" });
+  const fixtureStatuses = new Map(audit.productionAudit(fixtureOnly).map((item) => [item.id, item.status]));
+  assert.notStrictEqual(fixtureStatuses.get("E"), "live-proved");
+  assert.notStrictEqual(fixtureStatuses.get("F"), "live-proved");
+
+  const quota = H.tmp("factoryv2-audit-quota-");
+  journal.append(quota, { type: "provider.backoff.scheduled", provider: "claude", scenarioId: "quota-a", origin: "live" });
+  journal.append(quota, { type: "deterministic.continuation", scenarioId: "quota-a", channelId: "invoice-audit", jobId: "job-q", origin: "live" });
+  assert.strictEqual(new Map(audit.productionAudit(quota).map((item) => [item.id, item.status])).get("H"), "live-proved");
+
   const earlyRetrieval = H.tmp("factoryv2-audit-early-retrieval-");
   journal.append(earlyRetrieval, { type: "channel.job.queued", channelId: "jarvis-development", job: { id: "job-early" } });
   journal.append(earlyRetrieval, { type: "channel.result.retrieved", channelId: "jarvis-development", jobId: "job-early", ok: false, verified: false });

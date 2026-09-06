@@ -49,7 +49,7 @@ async function main() {
     jobPackId: "kaylas-store:ops-pack",
     jobPackRevision: "7",
     primingRefs: ["capsule"],
-    contextRefs: ["skill:returns"],
+    contextRefs: ["skill:channel-operator"],
     evidenceRequired: ["capsule"]
   });
   assert.strictEqual(primed.envelope.jobPackId, "kaylas-store:ops-pack");
