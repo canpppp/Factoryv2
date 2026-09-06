@@ -12,6 +12,9 @@ const envelope = require("./envelope");
 const jarvisAcceptance = require("./jarvis-acceptance");
 const modelRouter = require("./model-router");
 const tokenGovernor = require("./token-governor");
+const { randomUUID } = require("node:crypto");
+const { createAdapter } = require("./adapters");
+const rolePolicy = require("./controller-policy");
 
 const MAX_REPAIRS = 2;
 
@@ -19,9 +22,36 @@ function slug(s) {
   return String(s || "goal").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 42) || "goal";
 }
 
-function createController({ root, adapter }) {
+function planGoal(goal) {
+  rolePolicy.assertMissionInput(goal.missionOverrides);
+  const templates = Array.isArray(goal.missionOverrides?.missions) && goal.missionOverrides.missions.length
+    ? goal.missionOverrides.missions : [goal.missionOverrides || {}];
+  return templates.map((template, index) => {
+    const missionId = template.id || `${goal.id.replace(/^goal-/, "mission-")}-${index + 1}`;
+    const mission = {
+      goalId: goal.id,
+      title: "Factory-generated mission",
+      repo: goal.repo,
+      branch: template.branch || `factory/${missionId.slice(0, 64)}`,
+      ownedFiles: ["src/**", "README.md", "docs/**", "tests/**"],
+      verifyCommands: ["npm test"],
+      acceptanceCommands: [],
+      trustDomain: (goal.envelope && goal.envelope.trustDomain) || "jarvis",
+      envelope: goal.envelope,
+      maxRepairRounds: MAX_REPAIRS,
+      attempts: 0,
+      repairRounds: 0,
+      replacements: 0,
+      ...template
+    };
+    delete mission.missions;
+    return { missionId, mission };
+  });
+}
+
+function createController({ root, adapter, adapterFactory = createAdapter, rolePolicies, rolePoliciesPath }) {
   if (!root) throw new Error("controller needs root");
-  if (!adapter) throw new Error("controller needs adapter");
+  const trustedPolicies = rolePolicy.loadRolePolicies({ rolePolicies, rolePoliciesPath });
 
   const emit = (event) => journal.append(root, event);
   const setMissionState = (mission, to, extra = {}) => {
@@ -35,6 +65,7 @@ function createController({ root, adapter }) {
   };
 
   function enqueueGoal({ goal, repo, missionOverrides = {} }) {
+    rolePolicy.assertMissionInput(missionOverrides);
     const impact = policy.protectedImpact(goal);
     const id = `goal-${Date.now()}-${slug(goal)}`;
     const env = envelope.createEnvelope({
@@ -51,50 +82,21 @@ function createController({ root, adapter }) {
   }
 
   function architect(goal) {
+    const plan = planGoal(goal);
     emit({ type: "architect.started", goalId: goal.id });
-    const templates = Array.isArray(goal.missionOverrides.missions) && goal.missionOverrides.missions.length
-      ? goal.missionOverrides.missions
-      : [goal.missionOverrides || {}];
-    templates.forEach((template, index) => {
-      const missionId = template.id || `${goal.id.replace(/^goal-/, "mission-")}-${index + 1}`;
-      const branch = template.branch || `factory/${missionId.slice(0, 64)}`;
-      const mission = {
-      goalId: goal.id,
-      title: "Factory-generated mission",
-      repo: goal.repo,
-      branch,
-      ownedFiles: ["src/**", "README.md", "docs/**", "tests/**"],
-      verifyCommands: ["npm test"],
-      acceptanceCommands: [],
-      trustDomain: (goal.envelope && goal.envelope.trustDomain) || "jarvis",
-      envelope: goal.envelope,
-      maxRepairRounds: MAX_REPAIRS,
-      attempts: 0,
-      repairRounds: 0,
-      replacements: 0,
-      ...template
-      };
-      delete mission.missions;
+    plan.forEach(({ missionId, mission }) => {
       emit({ type: "mission.created", goalId: goal.id, missionId, mission });
     });
     emit({ type: "goal.state", goalId: goal.id, from: goal.state, to: "running" });
   }
 
   async function build(mission) {
+    rolePolicy.requireRolePolicies(trustedPolicies);
+    if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(mission.id)) throw Object.assign(new Error("invalid mission identity"), { code: "POLICY_DENIED" });
     const worktree = mission.worktree || git.ensureWorktree(root, mission);
     if (!mission.worktree) setField(mission, "worktree", worktree);
-    setMissionState(mission, "building");
-    const resumingWorker = !!mission.workerThreadId;
-    const workerPolicy = modelRouter.route({ kind: mission.repairRounds ? "difficult-repair" : "implementation", engine: adapter.engine || "claude", failedRepairs: mission.repairRounds || 0 });
-    const worker = startOrResumeWorker(mission, worktree, workerPolicy);
     const prompt = workerPrompt(mission);
-    const result = await worker.run(prompt, {
-      onThreadId: (id) => {
-        if (id && id !== mission.workerThreadId) setField(mission, "workerThreadId", id);
-      }
-    });
-    emit({ type: "agent.receipt", missionId: mission.id, role: "worker", receipt: compactReceipt(result) });
-    tokenGovernor.record(root, { scope: `mission:${mission.id}:worker`, prompt, receipt: result, modelPolicy: { ...workerPolicy, reusedSession: resumingWorker } });
+    const result = await runRole(mission, "worker", prompt);
     if (result.finalResponse && /MALFORMED_WORKER_RESPONSE/.test(result.finalResponse)) {
       const e = new Error("malformed worker response");
       e.code = "MALFORMED_WORKER_RESPONSE";
@@ -110,19 +112,112 @@ function createController({ root, adapter }) {
     setMissionState(mission, "verifying");
   }
 
-  function startOrResumeWorker(mission, worktree, modelPolicy) {
-    const options = { role: "worker", cwd: worktree, readOnly: false, model: modelPolicy.model, maxTurns: 12 };
-    if (!mission.workerThreadId) return adapter.startThread(options);
+  function session(mission, role, record) {
+    emit({ type: "mission.role.session", missionId: mission.id, role, record });
+    mission.roleSessions = { ...mission.roleSessions, [role]: record };
+    mission[`${role}ThreadId`] = record.sessionId;
+  }
+
+  function resetRole(mission, role, reason) {
+    const previous = mission.roleSessions?.[role];
+    if (previous && previous.status !== "settled") throw Object.assign(new Error("prior role execution requires reconciliation"), { code: "RECONCILIATION_REQUIRED" });
+    emit({ type: `${role}.replaced`, missionId: mission.id, oldThreadId: mission[`${role}ThreadId`], reason });
+    setField(mission, "replacements", (mission.replacements || 0) + 1);
+    session(mission, role, { ...previous, version: 1, missionId: mission.id, role, sessionId: null, profileDigest: null, status: "settled", terminalCause: reason });
+  }
+
+  function checkSettled(mission) {
+    for (const record of Object.values(mission.roleSessions || {})) {
+      if (record.terminalCause === "CLEANUP_FAILED") throw Object.assign(new Error("prior role cleanup failed"), { code: "CLEANUP_FAILED" });
+      if (record.status !== "settled") throw Object.assign(new Error("prior role execution requires reconciliation"), { code: "RECONCILIATION_REQUIRED" });
+    }
+    for (const role of rolePolicy.roles) {
+      if (mission[`${role}ThreadId`] && !mission.roleSessions?.[role] && !legacySettled(mission, role)) {
+        throw Object.assign(new Error("legacy role session requires reconciliation"), { code: "RECONCILIATION_REQUIRED" });
+      }
+    }
+  }
+
+  function legacySettled(mission, role) {
+    const last = journal.load(root).events.findLast((event) => event.missionId === mission.id && (
+      (event.type === "agent.receipt" && event.role === role)
+      || event.type === `${role}.interrupted`
+      || (event.type === "mission.state" && event.to === (role === "worker" ? "building" : "reviewing"))));
+    return last?.type === "agent.receipt" && last.receipt?.ok === true && last.receipt?.sessionId === mission[`${role}ThreadId`] && last.receipt?.metadata?.terminationCause === "EXIT";
+  }
+
+  async function runRole(mission, role, prompt) {
+    const attemptId = randomUUID();
+    let profile, record, thread, conflict = false, invoked = false, resumed = false;
+    const modelPolicies = Object.fromEntries(rolePolicy.roles.map((name) => [name, modelRouter.route({
+      kind: name === "reviewer" ? "routine-review" : mission.repairRounds ? "difficult-repair" : "implementation",
+      engine: trustedPolicies?.[name]?.engine || "claude", failedRepairs: name === "worker" ? mission.repairRounds || 0 : 0
+    })]));
     try {
-      return adapter.resumeThread(mission.workerThreadId, options);
-    } catch (e) {
-      if (e.code !== "THREAD_NOT_FOUND") throw e;
-      const oldThreadId = mission.workerThreadId;
-      const next = (mission.replacements || 0) + 1;
-      setField(mission, "replacements", next);
-      emit({ type: "worker.replaced", missionId: mission.id, oldThreadId, reason: e.code });
-      setField(mission, "workerThreadId", null);
-      return adapter.startThread({ ...options, handoffFrom: oldThreadId });
+      checkSettled(mission);
+      const prepared = rolePolicy.compileRolePolicies({ root, mission, policies: trustedPolicies, modelPolicies });
+      const current = prepared[role];
+      profile = current.profile;
+      const engine = profile.engine;
+      const peer = role === "worker" ? "reviewer" : "worker";
+      record = mission.roleSessions?.[role];
+      const priorId = record?.sessionId || mission[`${role}ThreadId`];
+      if (priorId && priorId === mission[`${peer}ThreadId`]) throw Object.assign(new Error("role sessions must be independent"), { code: "POLICY_DENIED" });
+      if (priorId && !record) {
+        if (!legacySettled(mission, role)) throw Object.assign(new Error("legacy session requires reconciliation"), { code: "RECONCILIATION_REQUIRED" });
+        resetRole(mission, role, "LEGACY_SESSION");
+        record = null;
+      } else if (record?.sessionId && (record.version !== 1 || record.missionId !== mission.id || record.role !== role || record.engine !== engine || record.profileDigest !== profile.digest)) {
+        resetRole(mission, role, "SESSION_POLICY_CHANGED");
+        record = null;
+      }
+      const workerAdapter = adapter || adapterFactory(current.config);
+      if (record?.sessionId) {
+        try {
+          thread = workerAdapter.resumeThread(record.sessionId, { ...current.options, resumeProfileDigest: record.profileDigest });
+          resumed = true;
+        } catch (error) {
+          if (!["THREAD_NOT_FOUND", "SESSION_POLICY_CHANGED"].includes(error.code)) throw error;
+          resetRole(mission, role, error.code);
+        }
+      }
+      if (!thread) thread = workerAdapter.startThread(current.options);
+      if (thread.profile?.digest !== profile.digest) throw Object.assign(new Error("adapter did not bind the effective role policy"), { code: "ISOLATION_UNSUPPORTED" });
+      if (role === "worker") setMissionState(mission, "building");
+      record = { version: 1, missionId: mission.id, role, engine, sessionId: resumed ? record.sessionId : null, profileDigest: profile.digest, attemptId, status: "running", terminalCause: null, externalEffects: "UNKNOWN" };
+      session(mission, role, record);
+      invoked = true;
+      const result = await thread.run(prompt, {
+        onThreadId: (id) => {
+          if (!id) return;
+          if (id === mission[`${peer}ThreadId`]) { conflict = true; thread.cancel?.(); return; }
+          record = { ...record, sessionId: id };
+          session(mission, role, record);
+        }
+      });
+      const returnedId = result.sessionId || result.threadId;
+      if (conflict || !returnedId || returnedId === mission[`${peer}ThreadId`] || returnedId !== record.sessionId) {
+        throw Object.assign(new Error("role session identity mismatch"), { code: "POLICY_DENIED", details: { receipt: { metadata: result.metadata } } });
+      }
+      if (result.ok === false || result.metadata?.profileDigest !== profile.digest || result.metadata?.terminationCause !== "EXIT" || result.metadata?.ownedRunSettled !== true) {
+        throw Object.assign(new Error("role receipt is not a verified terminal success"), { code: result.metadata?.terminationCause === "CLEANUP_FAILED" ? "CLEANUP_FAILED" : "RECONCILIATION_REQUIRED", details: { receipt: { metadata: result.metadata } } });
+      }
+      record = { ...record, status: "settled", terminalCause: "EXIT", externalEffects: result.metadata.externalEffects || "UNKNOWN" };
+      session(mission, role, record);
+      emit({ type: "agent.receipt", missionId: mission.id, role, attemptId, receipt: compactReceipt(result) });
+      tokenGovernor.record(root, { scope: `mission:${mission.id}:${role}`, prompt, receipt: result, modelPolicy: { ...modelPolicies[role], model: profile.model, reusedSession: resumed } });
+      return result;
+    } catch (error) {
+      const metadata = error.details?.receipt?.metadata;
+      const terminal = metadata?.terminationCause;
+      const code = error.code === "CLEANUP_FAILED" || terminal === "CLEANUP_FAILED" ? "CLEANUP_FAILED" : conflict ? "POLICY_DENIED" : error.code || "POLICY_DENIED";
+      const settled = code !== "CLEANUP_FAILED" && code !== "RECONCILIATION_REQUIRED" && (!invoked || (metadata?.profileDigest === profile?.digest && metadata?.ownedRunSettled === true && ["EXIT", "TIMEOUT", "CANCELLED", "OUTPUT_LIMIT", "SPAWN_ERROR"].includes(terminal)));
+      if (invoked || code === "CLEANUP_FAILED" || code === "RECONCILIATION_REQUIRED") session(mission, role, {
+        version: 1, missionId: mission.id, role, engine: profile?.engine || null, sessionId: mission[`${role}ThreadId`] || null, profileDigest: profile?.digest || null, attemptId,
+        ...record, status: settled ? "settled" : "uncertain", terminalCause: code === "CLEANUP_FAILED" ? code : terminal || code, externalEffects: "UNKNOWN" });
+      emit({ type: "mission.attempt.finished", missionId: mission.id, role, attemptId, code, receipt: { ok: false, engine: profile?.engine || null, sessionId: record?.sessionId || null,
+        metadata: { profileDigest: profile?.digest || null, terminationCause: terminal || code, externalEffects: invoked || !settled ? "UNKNOWN" : "NONE_DECLARED", ownedRunSettled: settled, synthetic: profile?.synthetic ?? null } } });
+      throw Object.assign(new Error(`role ${role} failed: ${code}`), { code, role, settled });
     }
   }
 
@@ -144,20 +239,8 @@ function createController({ root, adapter }) {
   }
 
   async function review(mission) {
-    const resumingReviewer = !!mission.reviewerThreadId;
-    const reviewerPolicy = modelRouter.route({ kind: "routine-review", engine: adapter.engine || "claude" });
-    const options = { role: "reviewer", cwd: mission.worktree, readOnly: true, model: reviewerPolicy.model, maxTurns: 6 };
-    const reviewer = mission.reviewerThreadId
-      ? adapter.resumeThread(mission.reviewerThreadId, options)
-      : adapter.startThread(options);
     const prompt = reviewPrompt(mission);
-    const res = await reviewer.run(prompt, {
-      onThreadId: (id) => {
-        if (id && id !== mission.reviewerThreadId) setField(mission, "reviewerThreadId", id);
-      }
-    });
-    emit({ type: "agent.receipt", missionId: mission.id, role: "reviewer", receipt: compactReceipt(res) });
-    tokenGovernor.record(root, { scope: `mission:${mission.id}:reviewer`, prompt, receipt: res, modelPolicy: { ...reviewerPolicy, reusedSession: resumingReviewer } });
+    const res = await runRole(mission, "reviewer", prompt);
     const verdict = parseReview(res.finalResponse);
     emit({ type: "review.finished", missionId: mission.id, verdict });
     if (mission.workerThreadId && mission.workerThreadId === mission.reviewerThreadId) {
@@ -245,18 +328,24 @@ function createController({ root, adapter }) {
     setMissionState(mission, "repair");
   }
 
-  async function step() {
+  async function step({ missionId } = {}) {
     let state = journal.load(root);
     if (!state.ok) return { progressed: false, summary: `blocked: ${state.reason}` };
-    const queuedGoal = [...state.goals.values()].find((g) => g.state === "queued");
+    const requested = state.missions.get(missionId);
+    if (requested?.preparationRequestId && state.preparations.get(requested.preparationRequestId)?.status !== "prepared") {
+      return { progressed: false, code: "PREPARATION_BLOCKED", summary: "mission preparation is unresolved" };
+    }
+    const queuedGoal = !missionId && [...state.goals.values()].find((g) => g.state === "queued");
     if (queuedGoal) {
       architect(queuedGoal);
       return { progressed: true, summary: "architected goal" };
     }
     state = journal.load(root);
-    const mission = [...state.missions.values()].find((m) => isRunnable(m, state.missions));
+    const mission = [...state.missions.values()].find((m) => (!missionId || m.id === missionId)
+      && (!m.preparationRequestId || state.preparations.get(m.preparationRequestId)?.status === "prepared") && isRunnable(m, state.missions));
     if (!mission) return { progressed: false, summary: "idle" };
     try {
+      checkSettled(mission);
       if (["queued", "building", "repair"].includes(mission.state)) await build(mission);
       else if (mission.state === "verifying") verify(mission);
       else if (mission.state === "reviewing") await review(mission);
@@ -266,36 +355,40 @@ function createController({ root, adapter }) {
       journal.writeSnapshot(root);
       return { progressed: true, summary: `advanced ${mission.id}` };
     } catch (e) {
-      if (e.code === "INTERRUPTED") {
+      if (e.code === "INTERRUPTED" && e.settled) {
         emit({ type: "worker.interrupted", missionId: mission.id, message: e.message });
         journal.writeSnapshot(root);
         return { progressed: true, interrupted: true, summary: `interrupted ${mission.id}; restart will resume` };
       }
-      if (e.code === "PROVIDER_QUOTA") {
-        emit({ type: "provider.quota", missionId: mission.id, engine: adapter.engine || "unknown", message: e.message });
+      if (e.code === "PROVIDER_QUOTA" && e.settled) {
+        emit({ type: "provider.quota", missionId: mission.id, engine: trustedPolicies?.[e.role]?.engine || "unknown", message: e.message });
         journal.writeSnapshot(root);
         return { progressed: false, backoff: true, summary: `provider quota for ${mission.id}` };
       }
-      if (["THREAD_NOT_FOUND", "TIMEOUT", "MALFORMED_WORKER_RESPONSE"].includes(e.code)) {
-        setField(mission, "replacements", (mission.replacements || 0) + 1);
-        emit({ type: "worker.replaced", missionId: mission.id, oldThreadId: mission.workerThreadId, reason: e.code });
-        setField(mission, "workerThreadId", null);
-        setMissionState(mission, "repair");
-        return { progressed: true, summary: `replaced worker for ${mission.id}: ${e.code}` };
+      const role = e.role || "worker";
+      if (["THREAD_NOT_FOUND", "TIMEOUT", "MALFORMED_WORKER_RESPONSE"].includes(e.code) && mission.roleSessions?.[role]?.status === "settled") {
+        resetRole(mission, role, e.code);
+        setMissionState(mission, role === "reviewer" ? "reviewing" : "repair");
+        return { progressed: true, summary: `replaced ${role} for ${mission.id}: ${e.code}` };
       }
-      setMissionState(mission, "blocked", { blocker: e.message });
-      return { progressed: true, summary: `blocked ${mission.id}: ${e.message}` };
+      emit({ type: "mission.blocked", missionId: mission.id, role: e.role || null, code: e.code || "AGENT_FAILED" });
+      if (!e.role) emit({ type: "mission.attempt.finished", missionId: mission.id, role: mission.state === "reviewing" ? "reviewer" : "worker", code: e.code || "AGENT_FAILED",
+        receipt: { ok: false, metadata: { profileDigest: null, terminationCause: e.code || "AGENT_FAILED", externalEffects: ["CLEANUP_FAILED", "RECONCILIATION_REQUIRED"].includes(e.code) ? "UNKNOWN" : "NONE_DECLARED" } } });
+      setMissionState(mission, "blocked", { blocker: e.code ? `${e.code}: ${e.message}` : e.message });
+      journal.writeSnapshot(root);
+      return { progressed: true, code: e.code || "AGENT_FAILED", summary: `blocked ${mission.id}: ${e.message}` };
     }
   }
 
-  async function run({ maxSteps = 100 } = {}) {
+  async function run({ maxSteps = 100, missionId } = {}) {
     const paused = path.join(journal.paths(root).root, "PAUSED");
     if (require("node:fs").existsSync(paused)) return { ok: true, summary: "paused" };
     return lease.withLease(root, async () => {
       let summary = "idle";
       for (let i = 0; i < maxSteps; i++) {
-        const r = await step();
+        const r = await step({ missionId });
         summary = r.summary;
+        if (r.code) return { ok: false, code: r.code, summary };
         if (r.interrupted || r.backoff || !r.progressed) return { ok: true, summary, backoff: !!r.backoff };
       }
       return { ok: true, summary };
@@ -364,4 +457,4 @@ function renderReceipt(mission) {
   return `${mission.id}: gates=[${gates}] acceptance=[${acceptance}]. Human app check required.`;
 }
 
-module.exports = { createController, parseReview, workerPrompt, reviewPrompt, compactReceipt };
+module.exports = { createController, planGoal, parseReview, workerPrompt, reviewPrompt, compactReceipt };

@@ -10,12 +10,14 @@ const value = (name, fallback) => {
   return index >= 0 ? argv[index + 1] : fallback;
 };
 const root = path.resolve(value("root", process.env.FACTORYV2_HOME || ".factoryv2"));
-const daemon = createDaemon({ root, engine: value("engine", process.env.FACTORYV2_ENGINE || "claude"), pollMs: Number(value("poll-ms", "5000")) });
+const daemon = createDaemon({ root, engine: value("engine", process.env.FACTORYV2_ENGINE || "claude"), pollMs: Number(value("poll-ms", "5000")), rolePoliciesPath: value("role-policies", undefined) });
 process.on("SIGTERM", () => daemon.stop());
 process.on("SIGINT", () => daemon.stop());
 
 async function main() {
-  if (!argv.includes("--once")) return daemon.start();
+  if (!argv.includes("--local-test")) return daemon.start({ once: argv.includes("--once") });
+  if (!argv.includes("--once")) throw new Error("local test mode requires --once");
+  require("../src/owner-client").assertLocalTest(root);
   const journal = require("../src/journal");
   journal.append(root, { type: "daemon.started", pid: process.pid, engine: value("engine", process.env.FACTORYV2_ENGINE || "claude"), once: true });
   try { return await daemon.runOnce(); }

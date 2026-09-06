@@ -7,12 +7,11 @@ const { createController } = require("../src/controller");
 const journal = require("../src/journal");
 const report = require("../src/report");
 const audit = require("../src/audit");
-const { createAdapter } = require("../src/adapters");
 const { createChannelRegistry } = require("../src/channels");
 const { install: installLaunchd } = require("../src/launchd");
 
 const argv = process.argv.slice(2);
-const FLAGS_WITH_VALUES = new Set(["--root", "--repo", "--max-steps", "--engine"]);
+const FLAGS_WITH_VALUES = new Set(["--root", "--repo", "--max-steps", "--engine", "--role-policies", "--mission", "--request-id", "--goal"]);
 function positionals() {
   const out = [];
   for (let i = 0; i < argv.length; i++) {
@@ -47,15 +46,42 @@ async function main() {
     if (!text) die("usage: factoryv2 goal <goal text> [--repo <path>]");
     const repo = flag("repo", null);
     if (!repo) die("--repo is required for F0/F1");
-    const controller = createController({ root, adapter: createAdapter({ engine: flag("engine", process.env.FACTORYV2_ENGINE || "claude") }) });
+    const controller = createController({ root, rolePoliciesPath: flag("role-policies") });
     const goal = controller.enqueueGoal({ goal: text, repo: path.resolve(repo) });
     console.log(`queued ${goal.id}`);
     return;
   }
+  if (cmd === "prepare") {
+    const allowed = new Set(["--root", "--goal", "--request-id"]);
+    for (let i = 1; i < argv.length; i += 2) {
+      if (!allowed.has(argv[i]) || typeof argv[i + 1] !== "string" || argv[i + 1].startsWith("--")) die("REQUEST_INVALID: prepare accepts root, goal and request-id only");
+    }
+    const result = await require("../src/owner-client").call(root, "mission.prepare", { requestId: flag("request-id"), goalId: flag("goal") });
+    console.log(JSON.stringify(result));
+    if (result.status !== "prepared") process.exitCode = 1;
+    return;
+  }
+  if (cmd === "run" && !argv.includes("--local-test") || cmd === "result") {
+    const client = require("../src/owner-client");
+    if (flag("role-policies") || flag("engine")) die("REQUEST_INVALID: owner policies are not client inputs");
+    const requestId = flag("request-id");
+    let result = await client.call(root, cmd === "run" ? "mission.run" : "mission.result",
+      cmd === "run" ? { requestId, missionId: flag("mission"), maxSteps: Number(flag("max-steps", 1)) } : { requestId });
+    const deadline = Date.now() + 60000;
+    while (argv.includes("--wait") && ["admitted", "started"].includes(result.status) && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      result = await client.call(root, "mission.result", { requestId });
+    }
+    console.log(JSON.stringify(result));
+    if (result.status === "blocked" || result.outcome?.execution?.ok === false) process.exitCode = 1;
+    return;
+  }
   if (cmd === "run") {
-    const controller = createController({ root, adapter: createAdapter({ engine: flag("engine", process.env.FACTORYV2_ENGINE || "claude") }) });
+    require("../src/owner-client").assertLocalTest(root);
+    const controller = createController({ root, rolePoliciesPath: flag("role-policies") });
     const result = await controller.run({ maxSteps: Number(flag("max-steps", 100)) });
-    console.log(result.summary);
+    console.log(result.code ? `${result.code}: ${result.summary}` : result.summary);
+    if (!result.ok) process.exitCode = 1;
     return;
   }
   if (cmd === "status") {

@@ -4,19 +4,25 @@ const fs = require("node:fs");
 const http = require("node:http");
 const journal = require("./journal");
 const { createChannelTools } = require("./jarvis-tools");
+const ownership = require("./execution-owner");
 
 const MAX_BODY_BYTES = 64 * 1024;
 
-function createChannelApi({ root, registry, socketPath: configuredSocketPath } = {}) {
+function createChannelApi({ root, registry, socketPath: configuredSocketPath, extraTools = {}, beforeReady = () => {} } = {}) {
   if (!root || !registry) throw new Error("channel API needs root and registry");
-  const tools = createChannelTools(registry);
+  const tools = { ...createChannelTools(registry), ...extraTools };
   const socketPath = configuredSocketPath || journal.paths(root).daemon + "/channel-api.sock";
   let server;
+  let owner;
 
   async function start() {
     journal.ensure(root);
-    removeManagedSocket(socketPath);
-    server = http.createServer((request, response) => handle(request, response, tools));
+    owner = await ownership.acquire(root, socketPath);
+    server = http.createServer((request, response) => handle(request, response, tools, () => {
+      owner.assertOwned();
+      if (!owner.record.ready) ownership.fail("OWNER_NOT_READY");
+      return owner.record;
+    }));
     await new Promise((resolve, reject) => {
       server.once("error", reject);
       server.listen(socketPath, () => {
@@ -25,27 +31,34 @@ function createChannelApi({ root, registry, socketPath: configuredSocketPath } =
       });
     });
     fs.chmodSync(socketPath, 0o600);
+    owner.bound();
+    await beforeReady(owner);
+    owner.ready();
     journal.append(root, { type: "channel.api.started", socketPath, pid: process.pid });
     return socketPath;
   }
 
   async function close() {
     if (!server) return;
+    owner.assertOwned();
+    owner.record.ready = false;
     await new Promise((resolve) => server.close(resolve));
     server = null;
-    removeManagedSocket(socketPath);
+    owner.release();
     journal.append(root, { type: "channel.api.stopped", socketPath, pid: process.pid });
   }
 
-  return { start, close, socketPath };
+  return { start, close, socketPath, assertOwned: () => owner.assertOwned(), get owner() { return owner?.record; } };
 }
 
-async function handle(request, response, tools) {
-  if (request.method === "GET" && request.url === "/health") return send(response, 200, { ok: true });
-  if (request.method !== "POST" || request.url !== "/rpc") return send(response, 404, failure("NOT_FOUND", "unknown endpoint"));
+async function handle(request, response, tools, context) {
   try {
+    const owner = context?.();
+    if (request.method === "GET" && request.url === "/health") return send(response, 200, { ok: true, ...(owner ? { owner } : {}) });
+    if (request.method !== "POST" || request.url !== "/rpc") return send(response, 404, failure("NOT_FOUND", "unknown endpoint"));
     const payload = JSON.parse(await readBody(request));
-    if (!payload || typeof payload.method !== "string" || !tools[payload.method]) return send(response, 400, failure("METHOD_DENIED", "unknown channel method"));
+    if (!payload || typeof payload.method !== "string" || !Object.hasOwn(tools, payload.method)) return send(response, 400, failure("METHOD_DENIED", "unknown channel method"));
+    if (payload.method.startsWith("mission.") && (!owner || payload.owner?.generation !== owner.generation || payload.owner?.root !== owner.root.path)) ownership.fail("OWNER_CHANGED");
     const result = await tools[payload.method](payload.params || {});
     return send(response, 200, { ok: true, id: payload.id || null, result });
   } catch (error) {
@@ -81,16 +94,6 @@ function send(response, status, payload) {
 
 function failure(code, message) {
   return { ok: false, error: { code, message } };
-}
-
-function removeManagedSocket(socketPath) {
-  try {
-    const stat = fs.lstatSync(socketPath);
-    if (!stat.isSocket()) throw new Error(`refusing to replace non-socket path: ${socketPath}`);
-    fs.unlinkSync(socketPath);
-  } catch (error) {
-    if (error.code !== "ENOENT") throw error;
-  }
 }
 
 module.exports = { createChannelApi, handle, MAX_BODY_BYTES };

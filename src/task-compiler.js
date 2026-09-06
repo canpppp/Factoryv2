@@ -5,6 +5,9 @@ const { createHash } = require("node:crypto");
 const PRIORITIES = new Set(["low", "normal", "high"]);
 
 function compileTask(channel, input = {}) {
+  for (const key of ["workerPolicy", "command", "executable", "env", "auth", "stateRoot", "runtimeReadRoots", "resumeProfileDigest"]) {
+    if (Object.hasOwn(input, key)) throw Object.assign(new Error(`jobs cannot override worker ${key}`), { code: "POLICY_DENIED" });
+  }
   const tokenBudget = clamp(input.tokenBudget, 256, 32000, 4000);
   const timeoutMs = clamp(input.timeoutMs, 1000, 30 * 60 * 1000, 5 * 60 * 1000);
   const profile = acceptanceProfile(input.acceptanceProfile, input.doneCondition);
@@ -30,6 +33,10 @@ function compileTask(channel, input = {}) {
     budgets: { tokenBudget, timeoutMs },
     priority: PRIORITIES.has(input.priority) ? input.priority : "normal",
     requestedTools: boundedList(input.requestedTools, 12, 100),
+    ...(input.disallowedTools == null ? {} : { disallowedTools: boundedList(input.disallowedTools, 12, 100) }),
+    ...(input.readRoots == null ? {} : { readRoots: boundedList(input.readRoots, 12, 1000) }),
+    ...(input.writeRoots == null ? {} : { writeRoots: boundedList(input.writeRoots, 12, 1000) }),
+    ...(input.outputLimits == null ? {} : { outputLimits: { ...input.outputLimits } }),
     idempotencyKey: input.idempotencyKey || input.jobId || null
   };
   envelope.payloadDigest = digest(canonicalPayload(envelope));
