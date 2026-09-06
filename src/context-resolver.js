@@ -8,7 +8,13 @@ const MAX_REQUIRED_BYTES = 64 * 1024;
 const MAX_OPTIONAL_BYTES = 16 * 1024;
 
 function resolveContext(channel, envelope = {}) {
-  channel = { ...channel, contextReadRoots: envelope.readRoots || channel.workerPolicy?.readRoots };
+  let granted, requested;
+  try {
+    granted = (channel.workerPolicy?.readRoots || [channel.cwd]).map(real);
+    requested = envelope.readRoots?.map(real);
+  } catch { return fail("POLICY_DENIED", "context read roots must exist"); }
+  if (requested?.some((file) => !granted.some((root) => file === root || inside(root, file)))) return fail("POLICY_DENIED", "context read roots exceed channel authority");
+  channel = { ...channel, contextReadRoots: requested || granted };
   const required = [...(envelope.primingRefs || []), ...(envelope.contextRefs || []), ...(envelope.requiredRefs || [])]
     .filter((ref, index, all) => ref && all.indexOf(ref) === index);
   const resolved = [];

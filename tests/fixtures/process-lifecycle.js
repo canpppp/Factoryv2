@@ -71,6 +71,16 @@ async function main() {
     return;
   }
 
+  if (mode === "late") {
+    process.on("SIGTERM", () => {
+      json({ type: "late-success" });
+      setTimeout(() => process.exit(0), 20);
+    });
+    json({ type: "ready" });
+    await sleep(60000);
+    return;
+  }
+
   if (mode === "term-tree") {
     process.on("SIGTERM", () => {});
     recordPid("parent");

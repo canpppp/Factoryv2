@@ -109,6 +109,14 @@ async function main() {
   const contextBlocked = await submit(narrowed, narrowed.request, { readRoots: [], requiredRefs: ["file:allowed"] });
   assert.equal(contextBlocked.run.result.code, "CONTEXT_POLICY_DENIED");
   assert.throws(() => narrowed.current.send("proof", "override", { env: {} }), { code: "POLICY_DENIED" });
+  const limited = setup();
+  const subdir = path.join(limited.business, "permitted"); fs.mkdirSync(subdir);
+  limited.definition.workerPolicy.readRoots = [subdir];
+  fs.writeFileSync(limited.definitionsPath, JSON.stringify([limited.definition]));
+  limited.current.ensureDefaults();
+  const widerPriming = await submit(limited, limited.request, { readRoots: [limited.business], requiredRefs: ["file:allowed"] });
+  assert.equal(widerPriming.run.result.code, "POLICY_DENIED");
+  assert.ok(!widerPriming.events.some((event) => event.type === "channel.context.resolved"));
   const unsupported = setup();
   delete unsupported.definition.workerPolicy;
   fs.writeFileSync(unsupported.definitionsPath, JSON.stringify([unsupported.definition]));

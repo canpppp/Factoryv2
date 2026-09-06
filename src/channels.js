@@ -208,6 +208,7 @@ function createChannelRegistry({ root, adapterFactory = (config) => createAdapte
           }
         });
         journal.append(root, { type: "worker.attempt.finished", channelId: channel.id, jobId: job.id, ok: !!receipt.ok, receipt: compactReceipt(receipt), origin: "factoryv2" });
+        runner.attemptFinished = true;
         const interruption = settleInterruption(root, channel.id, job, runner.action);
         if (interruption) return interruption;
         if (!receipt || typeof receipt.finalResponse !== "string" || !receipt.finalResponse.trim()) {
@@ -258,7 +259,7 @@ function createChannelRegistry({ root, adapterFactory = (config) => createAdapte
         journal.append(root, { type: "channel.job.finished", channelId: channel.id, jobId: job.id, result, origin: "factoryv2", evidenceOrigin: receipt.origin === "synthetic" ? "synthetic" : "provider" });
         return { progressed: true, channelId: channel.id, result };
       } catch (error) {
-        journal.append(root, { type: "worker.attempt.finished", channelId: channel.id, jobId: job.id, ok: false, code: error.code || "CHANNEL_FAILED", profileDigest: runner.profileDigest || null, receipt: error.details?.receipt || null, origin: "factoryv2", externalEffects: "UNKNOWN" });
+        if (!runner.attemptFinished) journal.append(root, { type: "worker.attempt.finished", channelId: channel.id, jobId: job.id, ok: false, code: error.code || "CHANNEL_FAILED", profileDigest: runner.profileDigest || null, receipt: error.details?.receipt || null, origin: "factoryv2", externalEffects: "UNKNOWN" });
         const interruption = settleInterruption(root, channel.id, job, runner.action);
         if (interruption) return interruption;
         if (error.code === "THREAD_NOT_FOUND" || error.code === "SESSION_POLICY_CHANGED") {

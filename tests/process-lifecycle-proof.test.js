@@ -177,6 +177,17 @@ test("ENOENT spawn resolves SPAWN_ERROR with bounded result shape", async () => 
   assert.equal(result.pid, null);
 });
 
+test("late output after cancellation cannot settle success or reach another callback", async () => {
+  const seen = [];
+  let handle;
+  handle = runFixture("late", { onEvent: (event) => { seen.push(event.type); handle.cancel(); } });
+  const result = await handle.promise;
+  assert.equal(result.cause, "CANCELLED");
+  assert.deepEqual(seen, ["ready"]);
+  assert.deepEqual(result.events.map((event) => event.type), ["ready"]);
+  assert.equal(handle.cancel(), false);
+});
+
 test("TERM-ignoring child and grandchild in owned group are gone by cleanup deadline", async () => {
   const pidDir = fs.mkdtempSync(path.join(os.tmpdir(), "process-lifecycle-"));
   const unrelated = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
