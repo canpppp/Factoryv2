@@ -33,7 +33,7 @@ async function main() {
   }
   console.log("Linux ownership backend:", spawnSync("/usr/bin/bwrap", ["--version"], { encoding: "utf8" }).stdout.trim());
   const evidence = [];
-  for (const mode of ["cancel", "timeout", "overflow", "exit", "owner-loss", "client-loss", "channel-cancel", "cleanup-unknown", "race"]) {
+  for (const mode of ["cancel", "timeout", "overflow", "exit", "owner-loss", "client-loss", "channel-cancel", "cleanup-unknown", "race", "info-malformed"]) {
     const dir = H.tmp("factory-linux-owned-");
     const token = randomUUID(), expiry = Date.now() + 18000;
     const provider = fixtureProfile(path.join(__dirname, "fixtures/linux-ownership-worker.js"), { readRoots: [dir], writeRoots: [dir], limits: { killGraceMs: 100, cleanupMs: 2000 } });
@@ -60,6 +60,13 @@ async function main() {
         const queued = await until(() => client.messages.find((item) => item.type === "queued"));
         assert.equal(queued.response.ok, true, JSON.stringify(queued));
       }
+      if (mode === "info-malformed") {
+        const settlement = await until(() => owner.messages.find((item) => item.type === "settled"));
+        result = settlement.result;
+        assert.equal(result.cause, "CLEANUP_FAILED");
+        assert.equal(result.ownership.state, "UNKNOWN");
+        assert.equal(fs.existsSync(path.join(dir, "leader.json")), false, "unobserved namespace must never release worker execution");
+      } else {
       await until(() => fs.existsSync(path.join(dir, "grandchild.json")));
       const locals = ["leader", "child", "grandchild"].map((role) => JSON.parse(fs.readFileSync(path.join(dir, `${role}.json`))));
       assert.ok(locals.every((item) => item.token === token));
@@ -113,6 +120,10 @@ async function main() {
         atSettlement = inventory(token, [...namespaces]).filter((item) => namespaces.has(item.namespace) && item.state !== "Z");
         assert.deepEqual(atSettlement, [], "settlement cannot precede active namespace cleanup");
         if (!channel) {
+          assert.equal(result.ownership.state, "TERMINATED");
+          assert.equal(result.ownership.init.pid, init.pid);
+          assert.equal(result.ownership.init.startTime, init.start);
+          assert.equal(result.ownership.init.namespace, init.namespace);
           assert.equal(settlement.namespaces.length, 1, "owner observed containment before settlement");
           assert.deepEqual(settlement.atSettlement, [], "wrapper promise settlement has no active owned namespace member");
           if (mode === "race") assert.ok(["CANCELLED", "TIMEOUT", "OUTPUT_LIMIT"].includes(result.cause));
@@ -156,6 +167,7 @@ async function main() {
           assert.notEqual(replacement.attempt.receipt.metadata.runId, attempt.receipt.metadata.runId);
           assert.equal(replacement.result.structured.jobId, replacement.attempt.jobId);
         }
+      }
       }
       assert.equal(same(controlIdentity)?.state === "Z", false, "unrelated control survives");
       assert.ok(same(controlIdentity));

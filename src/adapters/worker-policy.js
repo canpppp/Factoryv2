@@ -74,7 +74,7 @@ function compileWorkerPolicy(engine, config, options) {
   const runtimeReadRoots = (spec.runtimeReadRoots || []).map(canonical);
   if (!synthetic && runtimeReadRoots.length) fail("custom runtime exceptions require adapter validation", "ISOLATION_UNSUPPORTED");
   const profile = {
-    version: 2, channelId: options.channelId || null, engine, executable, executableSha256, entrypoint, entrypointSha256, synthetic, cwd, tools, disallowedTools, readRoots, writeRoots,
+    version: 2, ownership: process.platform === "linux" ? "linux-pid-namespace-v1" : "process-group", channelId: options.channelId || null, engine, executable, executableSha256, entrypoint, entrypointSha256, synthetic, cwd, tools, disallowedTools, readRoots, writeRoots,
     ...(options.controllerBinding ? { controllerBinding: JSON.parse(JSON.stringify(options.controllerBinding)) } : {}),
     stateRoot, runtimeReadRoots, sandbox, timeoutMs, limits,
     model: options.model || config.model || null, maxTurns: options.maxTurns || config.maxTurns || 12,
@@ -131,11 +131,11 @@ function prepareWorker(profile, args) {
     // Network access is not delegated by this packet. Live provider egress needs M0.3 validation.
     return { command: profile.sandbox, args: ["-p", rules.join("\n"), profile.executable, ...args], env, redact };
   }
-  const wrapped = ["--die-with-parent", "--unshare-all", "--new-session", "--proc", "/proc", "--dev", "/dev", "--dir", profile.cwd];
+  const wrapped = ["--die-with-parent", "--unshare-all", "--new-session", "--info-fd", "3", "--block-fd", "4", "--proc", "/proc", "--dev", "/dev", "--dir", profile.cwd];
   for (const root of reads) wrapped.push("--ro-bind", root, root);
   for (const root of [home, ...profile.writeRoots]) wrapped.push("--bind", root, root);
   wrapped.push("--chdir", profile.cwd, "--", profile.executable, ...args);
-  return { command: profile.sandbox, args: wrapped, env, redact };
+  return { command: profile.sandbox, args: wrapped, env, redact, ownership: profile.ownership };
 }
 
 module.exports = { compileWorkerPolicy, prepareWorker };

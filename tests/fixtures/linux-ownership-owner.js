@@ -10,6 +10,7 @@ const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
 setTimeout(() => process.exit(91), Math.max(1, config.expiry - Date.now()));
 const profile = compileWorkerPolicy("codex", config.provider, { cwd: config.dir, allowedTools: ["Read", "Write"], timeoutMs: config.timeoutMs });
 const prepared = prepareWorker(profile, [config.dir, token, String(config.expiry), "leader", config.mode]);
+if (config.mode === "info-malformed") prepared.args[prepared.args.indexOf("--info-fd") + 1] = "2";
 const namespaces = new Set(), hostNamespace = identity(process.pid).namespace;
 const namespacePins = [];
 const observe = () => {

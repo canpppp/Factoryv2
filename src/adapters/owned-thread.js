@@ -44,7 +44,7 @@ function createOwnedAdapter(engine, config, buildArgs, makeReceipt) {
           const result = JSON.parse(prepared.redact(JSON.stringify(raw)));
           const receipt = makeReceipt(result, id, { model: profile.model });
           receipt.origin = profile.synthetic ? "synthetic" : "adapter";
-          receipt.metadata = { ...receipt.metadata, profileDigest: profile.digest, executableSha256: profile.executableSha256, runId: runKey, pid: result.pid, terminationCause: result.cause, ownedRunSettled: result.cause !== "CLEANUP_FAILED", counts: result.counts, synthetic: profile.synthetic, externalEffects: result.cause === "EXIT" ? "NONE_DECLARED" : "UNKNOWN" };
+          receipt.metadata = { ...receipt.metadata, profileDigest: profile.digest, executableSha256: profile.executableSha256, runId: runKey, pid: result.pid, terminationCause: result.cause, ownedRunSettled: result.cause !== "CLEANUP_FAILED", ownership: result.ownership || null, counts: result.counts, synthetic: profile.synthetic, externalEffects: result.cause === "EXIT" ? "NONE_DECLARED" : "UNKNOWN" };
           if (!receipt.ok) {
             const error = classifiedError(receipt.error, result);
             error.message = `worker failed: ${error.code}`;

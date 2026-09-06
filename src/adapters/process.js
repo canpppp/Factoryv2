@@ -2,6 +2,7 @@
 
 const { spawn } = require("node:child_process");
 const { randomUUID } = require("node:crypto");
+const { createLinuxOwnership } = require("./linux-ownership");
 
 const DEFAULT_LIMITS = Object.freeze({ lineBytes: 1024 * 1024, stdoutBytes: 8 * 1024 * 1024, events: 4096, invalidLines: 32, stderrBytes: 65536, killGraceMs: 500, cleanupMs: 3000 });
 function validateLimits(value = {}) {
@@ -12,12 +13,13 @@ function validateLimits(value = {}) {
   return Object.freeze(limits);
 }
 
-function runJsonlProcess({ command, args = [], cwd, input, timeoutMs = 300000, env = {}, limits: configured, onEvent, onSpawn }) {
+function runJsonlProcess({ command, args = [], cwd, input, timeoutMs = 300000, env = {}, limits: configured, onEvent, onSpawn, ownership }) {
   const limits = validateLimits(configured);
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0 || timeoutMs > 1800000) throw Object.assign(new Error("invalid worker timeout"), { code: "POLICY_DENIED" });
+  if (ownership && (ownership !== "linux-pid-namespace-v1" || process.platform !== "linux")) throw Object.assign(new Error("unsupported ownership boundary"), { code: "ISOLATION_UNSUPPORTED" });
   const runId = randomUUID();
   let child, cause = null, settled = false, closed = false, exitCode = null, exitSignal = null;
-  let timer, killTimer, deadlineTimer, groupTimer;
+  let timer, killTimer, deadlineTimer, groupTimer, ownershipTimer, namespaceOwner, released = false;
   let pending = Buffer.alloc(0), stderr = Buffer.alloc(0);
   const events = [], invalidLines = [];
   const counts = { stdoutBytes: 0, stderrBytes: 0, events: 0, invalidLines: 0, pendingBytes: 0 };
@@ -34,25 +36,35 @@ function runJsonlProcess({ command, args = [], cwd, input, timeoutMs = 300000, e
   function finish() {
     if (settled) return;
     settled = true;
+    const ownershipReceipt = namespaceOwner?.receipt();
+    if (ownership && ownershipReceipt?.state !== "TERMINATED") cause = "CLEANUP_FAILED";
     for (const t of [timer, killTimer, deadlineTimer]) clearTimeout(t);
     clearInterval(groupTimer);
+    clearInterval(ownershipTimer);
+    child?.stdio?.[3]?.destroy(); child?.stdio?.[4]?.destroy();
+    namespaceOwner?.close();
     child?.stdout?.removeAllListeners("data"); child?.stderr?.removeAllListeners("data");
     child?.stdout?.destroy(); child?.stderr?.destroy(); child?.stdin?.destroy();
     child?.removeAllListeners("exit"); child?.removeAllListeners("close");
     child?.removeAllListeners("error"); child?.on("error", () => {});
     child?.unref();
     pending = Buffer.alloc(0);
-    resolve({ runId, pid: child?.pid || null, code: exitCode, signal: exitSignal, cause: cause || "EXIT", events, invalidLines, stderr: stderr.toString("utf8"), counts: { ...counts }, timedOut: cause === "TIMEOUT", cancelled: cause === "CANCELLED" });
+    resolve({ runId, pid: child?.pid || null, code: exitCode, signal: exitSignal, cause: cause || "EXIT", events, invalidLines, stderr: stderr.toString("utf8"), counts: { ...counts }, timedOut: cause === "TIMEOUT", cancelled: cause === "CANCELLED", ...(ownershipReceipt ? { ownership: ownershipReceipt } : {}) });
   }
-  function checkCleanup() { if (closed && !groupAlive()) finish(); }
+  function namespaceDone() { return !ownership || namespaceOwner?.observe() === "TERMINATED"; }
+  function checkCleanup() { if (closed && !groupAlive() && namespaceDone()) finish(); }
+  function cleanupTimers() {
+    if (deadlineTimer) return;
+    killTimer = setTimeout(() => { signalOwned("SIGKILL"); checkCleanup(); }, limits.killGraceMs);
+    groupTimer = setInterval(checkCleanup, 20);
+    deadlineTimer = setTimeout(() => { signalOwned("SIGKILL"); if (!closed || groupAlive() || !namespaceDone()) cause = "CLEANUP_FAILED"; finish(); }, limits.killGraceMs + limits.cleanupMs);
+  }
   function terminate(reason) {
     if (settled || cause) return false;
     cause = reason;
     clearTimeout(timer);
     signalOwned("SIGTERM");
-    killTimer = setTimeout(() => { signalOwned("SIGKILL"); checkCleanup(); }, limits.killGraceMs);
-    groupTimer = setInterval(checkCleanup, 20);
-    deadlineTimer = setTimeout(() => { signalOwned("SIGKILL"); if (!closed || groupAlive()) cause = "CLEANUP_FAILED"; finish(); }, limits.killGraceMs + limits.cleanupMs);
+    cleanupTimers();
     return true;
   }
   function line(buffer) {
@@ -70,7 +82,21 @@ function runJsonlProcess({ command, args = [], cwd, input, timeoutMs = 300000, e
   }
   try {
     if (process.platform === "win32") throw new Error("owned process groups unavailable");
-    child = spawn(command, args, { cwd, env: { ...env }, detached: true, stdio: ["pipe", "pipe", "pipe"] });
+    child = spawn(command, args, { cwd, env: { ...env }, detached: true, stdio: ownership ? ["pipe", "pipe", "pipe", "pipe", "pipe"] : ["pipe", "pipe", "pipe"] });
+    if (ownership) {
+      namespaceOwner = createLinuxOwnership(child.pid);
+      child.stdio[3].on("data", namespaceOwner.data);
+      child.stdio[3].on("end", namespaceOwner.end);
+      child.stdio[3].on("error", () => terminate("CLEANUP_FAILED"));
+      child.stdio[4].on("error", () => terminate("CLEANUP_FAILED"));
+      ownershipTimer = setInterval(() => {
+        if (namespaceOwner.invalid()) return terminate("CLEANUP_FAILED");
+        if (namespaceOwner.observe() === "ACTIVE" && !released && !cause) {
+          released = true; child.stdio[4].end("1");
+        }
+        checkCleanup();
+      }, 10);
+    }
     child.on("error", () => { closed = true; terminate("SPAWN_ERROR"); checkCleanup(); });
     child.stdin.on("error", () => {});
     child.stdout.on("data", (chunk) => {
@@ -100,7 +126,14 @@ function runJsonlProcess({ command, args = [], cwd, input, timeoutMs = 300000, e
     });
     child.on("close", (code, signal) => {
       closed = true; exitCode = code; exitSignal = signal;
-      if (!cause) { if (pending.length) line(pending); if (!cause) finish(); }
+      if (!cause) {
+        if (pending.length) line(pending);
+        if (!cause) {
+          clearTimeout(timer);
+          if (!ownership) finish();
+          else { checkCleanup(); if (!settled) cleanupTimers(); }
+        }
+      }
       else checkCleanup();
     });
     timer = setTimeout(() => terminate("TIMEOUT"), timeoutMs);

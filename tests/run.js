@@ -9,7 +9,7 @@ function held(file) {
   return true;
 }
 
-for (const file of ["tests/linux-ownership-proof.test.js", "tests/controller-policy-proof.test.js", "tests/m02-r1-proof.test.js", "tests/process-lifecycle-proof.test.js", "tests/worker-isolation-proof.test.js"]) {
+for (const file of ["tests/linux-ownership-parser.test.js", "tests/linux-ownership-proof.test.js", "tests/controller-policy-proof.test.js", "tests/m02-r1-proof.test.js", "tests/process-lifecycle-proof.test.js", "tests/worker-isolation-proof.test.js"]) {
   if (held(file)) continue;
   const result = spawnSync(process.execPath, [file], { stdio: "inherit" });
   if (result.status !== 0 || result.signal) process.exit(result.status || 1);
