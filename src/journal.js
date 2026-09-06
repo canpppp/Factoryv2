@@ -113,13 +113,14 @@ function materialize(events) {
         channel.sessionEngine = e.sessionId ? (e.engine || channel.engine) : null;
       }
     }
-    if (["channel.job.finished", "channel.job.failed", "channel.job.cancelled"].includes(e.type)) {
+    if (["channel.job.finished", "channel.job.failed", "channel.job.cancelled", "channel.job.unverified"].includes(e.type)) {
       const channel = channels.get(e.channelId);
       if (channel) {
         channel.latestResult = e.result || { ok: false, error: e.error || e.type };
         if (e.type === "channel.job.finished") channel.lastSuccessfulJob = e.result;
         else channel.lastFailure = e.result || { ok: false, error: e.error || e.type, jobId: e.jobId || null, at: e.at };
-        channel.currentJob = null;
+        channel.queue = channel.queue.filter((job) => job.id !== e.jobId);
+        if (!channel.currentJob || channel.currentJob.id === e.jobId) channel.currentJob = null;
         channel.state = e.type === "channel.job.finished" ? "idle" : "blocked";
         channel.heartbeat = e.at;
       }

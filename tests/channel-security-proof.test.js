@@ -6,7 +6,9 @@ const http = require("node:http");
 const os = require("node:os");
 const path = require("node:path");
 const { createChannelRegistry } = require("../src/channels");
-const { createChannelApi } = require("../src/channel-api");
+const { createChannelApi, handle } = require("../src/channel-api");
+const { createChannelTools } = require("../src/jarvis-tools");
+const audit = require("../src/audit");
 const journal = require("../src/journal");
 const H = require("./helpers");
 
@@ -31,10 +33,50 @@ async function main() {
   const jobId = "stable-job-id";
   const first = registry.send("invoice-audit", "compare", { jobId, deterministic: { kind: "invoice-compare", records: [] } });
   await registry.runNext();
-  const duplicate = registry.send("invoice-audit", "must not execute", { jobId });
+  const duplicate = registry.send("invoice-audit", "compare", { jobId, deterministic: { kind: "invoice-compare", records: [] } });
   assert.strictEqual(duplicate.id, first.id);
+  assert.throws(() => registry.send("invoice-audit", "must not execute", { jobId }), errorCode("IDEMPOTENCY_PAYLOAD_MISMATCH"));
   assert.strictEqual(registry.status("invoice-audit").queue.length, 0);
   assert.strictEqual(journal.load(root).events.filter((event) => event.type === "channel.job.queued" && event.job.id === jobId).length, 1);
+  assert.strictEqual(registry.result("invoice-audit", jobId).jobId, jobId);
+  const keyed = registry.send("invoice-audit", "keyed compare", { idempotencyKey: "admission-key-1", deterministic: { kind: "invoice-compare", records: [] } });
+  const keyedRetry = registry.send("invoice-audit", "keyed compare", { idempotencyKey: "admission-key-1", deterministic: { kind: "invoice-compare", records: [] } });
+  assert.strictEqual(keyedRetry.id, keyed.id);
+  assert.throws(() => registry.send("invoice-audit", "keyed compare changed", { idempotencyKey: "admission-key-1" }), errorCode("IDEMPOTENCY_PAYLOAD_MISMATCH"));
+
+  await contextFailure(fixture.definitionsPath, "private:session", "CONTEXT_PRIVACY_DENIED");
+  await contextFailure(fixture.definitionsPath, "project:wrong-store", "CONTEXT_FOREIGN_SCOPE");
+  await contextFailure(fixture.definitionsPath, "project-memory:esmebelle", "CONTEXT_FOREIGN_SCOPE");
+  await contextFailure(fixture.definitionsPath, "stale:rules", "CONTEXT_STALE");
+  await contextFailure(fixture.definitionsPath, "skill:missing-sop", "CONTEXT_MISSING");
+  await contextFailure(fixture.definitionsPath, "made-up:required", "CONTEXT_UNKNOWN_REF");
+  await contextFailure(fixture.definitionsPath, "file:missing.md", "CONTEXT_MISSING");
+  await requiredRefFailure(fixture.definitionsPath);
+  await realJarvisPackRefsResolve(fixture.definitionsPath, fixture.dir);
+  fs.writeFileSync(path.join(fixture.dir, "large.md"), "é".repeat(9000));
+  await contextFailure(fixture.definitionsPath, "file:large.md", "CONTEXT_TOO_LARGE");
+  fs.writeFileSync(path.join(fixture.dir, "outside.md"), "outside\n");
+  const link = path.join(fixture.dir, "escaped.md");
+  try { fs.symlinkSync(path.join(fixture.dir, "outside.md"), link); } catch {}
+  if (fs.existsSync(link)) await contextFailure(fixture.definitionsPath, "file:escaped.md", "CONTEXT_PATH_ESCAPE");
+
+  await sessionPathCannotEscape(fixture.definitionsPath);
+
+  await workerFailure(fixture.definitionsPath, () => "not json", "MALFORMED_RESPONSE");
+  await workerFailure(fixture.definitionsPath, (ids) => JSON.stringify({ done: false, channelId: ids.channelId, jobId: ids.jobId, summary: "not done", evidence: ["proof"], contextManifestSha256: ids.manifestSha }), "OBJECTIVE_UNVERIFIED");
+  await workerFailure(fixture.definitionsPath, (ids) => JSON.stringify({ done: true, jobId: ids.jobId, summary: "missing channel", evidence: ["proof"], contextManifestSha256: ids.manifestSha }), "CHANNEL_ID_MISSING");
+  await workerFailure(fixture.definitionsPath, (ids) => JSON.stringify({ done: true, channelId: ids.channelId, summary: "missing job", evidence: ["proof"], contextManifestSha256: ids.manifestSha }), "JOB_ID_MISSING");
+  await workerFailure(fixture.definitionsPath, (ids) => JSON.stringify({ done: true, channelId: ids.channelId, jobId: "other-job", summary: "wrong", evidence: ["proof"], contextManifestSha256: ids.manifestSha }), "WRONG_JOB");
+  await workerFailure(fixture.definitionsPath, (ids) => JSON.stringify({ done: true, channelId: ids.channelId, jobId: ids.jobId, summary: "completed analysis", evidence: [], contextManifestSha256: ids.manifestSha }), "EVIDENCE_MISSING");
+  await workerFailure(fixture.definitionsPath, (ids) => JSON.stringify({ done: true, channelId: ids.channelId, jobId: ids.jobId, summary: "created report", evidence: ["file:missing-report.txt"], contextManifestSha256: ids.manifestSha }), "EVIDENCE_UNSUPPORTED", { evidenceRequired: ["file:missing-report.txt"] });
+  await workerFailure(fixture.definitionsPath, (ids) => JSON.stringify({ done: true, channelId: ids.channelId, jobId: ids.jobId, summary: "completed analysis", evidence: ["file:report.txt"], contextManifestSha256: ids.manifestSha }), "ACCEPTANCE_UNSUPPORTED", { evidenceRequired: ["file:report.txt"], contextRefs: ["file:report.txt"], acceptanceProfile: [] });
+  fs.writeFileSync(path.join(fixture.dir, "ledger"), "reconciled=false\n");
+  await workerFailure(fixture.definitionsPath, (ids) => JSON.stringify({ done: true, channelId: ids.channelId, jobId: ids.jobId, summary: "reconciled against the ledger", evidence: ["source:ledger"], contextManifestSha256: ids.manifestSha }), "ACCEPTANCE_UNSUPPORTED", { evidenceRequired: ["source:ledger"], contextRefs: ["source:ledger"], doneCondition: "Verify every invoice against the ledger before reporting completion." });
+  await workerFailure(fixture.definitionsPath, (ids) => JSON.stringify({ done: true, channelId: ids.channelId, jobId: ids.jobId, summary: "I cannot access the source or create the required report.", evidence: ["proof"], contextManifestSha256: ids.manifestSha }), "OBJECTIVE_UNVERIFIED");
+  await workerFailure(fixture.definitionsPath, (ids) => JSON.stringify({ done: true, channelId: ids.channelId, jobId: ids.jobId, summary: "refused", evidence: ["proof"], refusal: true, contextManifestSha256: ids.manifestSha }), "WORKER_UNAVAILABLE");
+  await failedProviderDoesNotLiveProveWorkerInput(fixture.definitionsPath);
+  await measuredTotalPredicateFails(fixture.definitionsPath, fixture.dir);
+  await rpcAcceptanceProfileIsEnforced(fixture.definitionsPath, fixture.dir);
 
   const badPath = path.join(fixture.dir, "bad-channels.json");
   fs.writeFileSync(badPath, JSON.stringify([{ id: "missing", name: "Missing", cwd: path.join(fixture.dir, "absent"), engine: "claude", writeAuthority: "none" }]));
@@ -70,8 +112,10 @@ async function main() {
 
   const apiSocket = path.join(os.tmpdir(), `factoryv2-channel-api-${process.pid}.sock`);
   const api = createChannelApi({ root, registry, socketPath: apiSocket });
-  await api.start();
+  let socketStarted = false;
   try {
+    await api.start();
+    socketStarted = true;
     assert.strictEqual(fs.statSync(api.socketPath).mode & 0o777, 0o600);
     const list = await rpc(api.socketPath, "channel.list", {});
     assert.strictEqual(list.ok, true);
@@ -82,10 +126,21 @@ async function main() {
     const sent = await rpc(api.socketPath, "channel.send", { channelId: "kaylas-store", objective: "Inspect status", jobId: "api-job" });
     assert.strictEqual(sent.ok, true);
     assert.strictEqual(sent.result.envelope.objective, "Inspect status");
+  } catch (error) {
+    if (error.code !== "EPERM") throw error;
+    const list = await localRpc(registry, "channel.list", {});
+    assert.strictEqual(list.ok, true);
+    assert.strictEqual(list.result.length, 6);
+    const denied = await localRpc(registry, "shell.run", {});
+    assert.strictEqual(denied.ok, false);
+    assert.strictEqual(denied.error.code, "METHOD_DENIED");
+    const sent = await localRpc(registry, "channel.send", { channelId: "kaylas-store", objective: "Inspect status", jobId: "api-job" });
+    assert.strictEqual(sent.ok, true);
+    assert.strictEqual(sent.result.envelope.objective, "Inspect status");
   } finally {
-    await api.close();
+    if (socketStarted) await api.close();
   }
-  assert.strictEqual(fs.existsSync(api.socketPath), false);
+  if (socketStarted) assert.strictEqual(fs.existsSync(api.socketPath), false);
 
   await proveActiveInterruption(fixture.definitionsPath);
 
@@ -122,6 +177,195 @@ async function proveActiveInterruption(definitionsPath) {
   }
 }
 
+async function contextFailure(definitionsPath, ref, code) {
+  const registry = createChannelRegistry({ root: H.tmp(`factoryv2-context-${code}-`), definitionsPath });
+  registry.ensureDefaults();
+  registry.send("kaylas-store", `context failure ${code}`, { jobId: `job-${code}`, contextRefs: [ref] });
+  const run = await registry.runNext();
+  assert.strictEqual(run.result.code, code);
+  assert.strictEqual(registry.result("kaylas-store", `job-${code}`).code, code);
+}
+
+async function workerFailure(definitionsPath, responseFor, code, options = {}) {
+  const root = H.tmp(`factoryv2-worker-${code}-`);
+  const adapter = {
+    startThread: () => ({
+      run: async (prompt, hooks) => {
+        hooks.onThreadId("worker-failure-session");
+        const channelId = prompt.match(/^CHANNEL ([^\n]+)/m)?.[1];
+        const jobId = prompt.match(/^JOB ([^\n]+)/m)?.[1];
+        const hashes = [...prompt.matchAll(/"sha256":"([0-9a-f]{64})"/g)].map((match) => match[1]);
+        const manifestSha = hashes.at(-1);
+        return {
+          engine: "claude",
+          sessionId: "worker-failure-session",
+          finalResponse: responseFor({ channelId, jobId, manifestSha }),
+          metadata: {}
+        };
+      }
+    }),
+    resumeThread: () => { throw new Error("unexpected resume"); },
+    cancelThread: () => false
+  };
+  const registry = createChannelRegistry({ root, definitionsPath, adapterFactory: () => adapter });
+  registry.ensureDefaults();
+  if (options.contextRefs?.includes("file:report.txt")) fs.writeFileSync(path.join(path.dirname(definitionsPath), "report.txt"), "measured_total=12\n");
+  registry.send("kaylas-store", `worker failure ${code}`, { jobId: `worker-${code}-${String(options.evidenceRequired || "").replace(/[^a-z0-9]+/gi, "-")}`, evidenceRequired: options.evidenceRequired || ["proof"], contextRefs: options.contextRefs || [], acceptanceProfile: options.acceptanceProfile, doneCondition: options.doneCondition });
+  const run = await registry.runNext();
+  assert.strictEqual(run.result.code, code);
+  assert.strictEqual(registry.result("kaylas-store", run.result.jobId).code, code);
+}
+
+async function failedProviderDoesNotLiveProveWorkerInput(definitionsPath) {
+  const root = H.tmp("factoryv2-failed-provider-proof-");
+  const adapter = {
+    startThread: () => ({
+      run: async (_prompt, hooks) => {
+        hooks.onThreadId("failed-provider-session");
+        const error = new Error("fixture provider failure");
+        error.code = "CHANNEL_FAILED";
+        throw error;
+      }
+    }),
+    resumeThread: () => { throw new Error("unexpected resume"); },
+    cancelThread: () => false
+  };
+  const registry = createChannelRegistry({ root, definitionsPath, adapterFactory: () => adapter });
+  registry.ensureDefaults();
+  registry.send("kaylas-store", "failed provider must not prove worker input", { jobId: "failed-provider-proof", primingRefs: ["capsule"] });
+  const run = await registry.runNext();
+  assert.strictEqual(run.result.code, "CHANNEL_FAILED");
+  assert.strictEqual(journal.load(root).events.filter((event) => event.type === "channel.worker.input").length, 0);
+  assert.notStrictEqual(new Map(audit.productionAudit(root).map((item) => [item.id, item.status])).get("F"), "live-proved");
+}
+
+async function rpcAcceptanceProfileIsEnforced(definitionsPath, dir) {
+  const root = H.tmp("factoryv2-rpc-profile-");
+  const adapter = {
+    startThread: () => ({
+      run: async (prompt, hooks) => {
+        hooks.onThreadId("rpc-profile-session");
+        const hashes = [...prompt.matchAll(/"sha256":"([0-9a-f]{64})"/g)].map((match) => match[1]);
+        const jobId = prompt.match(/^JOB ([^\n]+)/m)?.[1];
+        return {
+          engine: "claude",
+          sessionId: "rpc-profile-session",
+          finalResponse: JSON.stringify({
+            done: true,
+            channelId: "kaylas-store",
+            jobId,
+            summary: "The report meets the required total of 73.",
+            evidence: ["file:report.txt"],
+            contextManifestSha256: hashes.at(-1)
+          }),
+          metadata: {}
+        };
+      }
+    }),
+    resumeThread: () => adapter.startThread(),
+    cancelThread: () => false
+  };
+  const registry = createChannelRegistry({ root, definitionsPath, adapterFactory: () => adapter });
+  registry.ensureDefaults();
+  const tools = createChannelTools(registry);
+  const profile = [{ type: "fieldEquals", ref: "file:report.txt", field: "measured_total", equals: "73" }];
+  fs.writeFileSync(path.join(dir, "report.txt"), "measured_total=12\n");
+  const rejected = await tools["channel.send"]({ channelId: "kaylas-store", jobId: "rpc-profile-reject", objective: "Check report", contextRefs: ["file:report.txt"], evidenceRequired: ["file:report.txt"], acceptanceProfile: profile });
+  assert.deepStrictEqual(rejected.envelope.acceptanceProfile, profile);
+  assert.strictEqual((await registry.runNext()).result.code, "OBJECTIVE_UNVERIFIED");
+  fs.writeFileSync(path.join(dir, "report.txt"), "measured_total=73\n");
+  await tools["channel.send"]({ channelId: "kaylas-store", jobId: "rpc-profile-pass", objective: "Check report", contextRefs: ["file:report.txt"], evidenceRequired: ["file:report.txt"], acceptanceProfile: profile });
+  assert.strictEqual((await registry.runNext()).result.verified, true);
+}
+
+async function measuredTotalPredicateFails(definitionsPath, dir) {
+  fs.writeFileSync(path.join(dir, "report.txt"), "measured_total=12\n");
+  const root = H.tmp("factoryv2-measured-total-");
+  const adapter = {
+    startThread: () => ({
+      run: async (prompt, hooks) => {
+        hooks.onThreadId("measured-session");
+        const hashes = [...prompt.matchAll(/"sha256":"([0-9a-f]{64})"/g)].map((match) => match[1]);
+        return {
+          engine: "claude",
+          sessionId: "measured-session",
+          finalResponse: JSON.stringify({
+            done: true,
+            channelId: "kaylas-store",
+            jobId: "measured-job",
+            summary: "The report meets the required total of 73.",
+            evidence: ["file:report.txt"],
+            contextManifestSha256: hashes.at(-1)
+          }),
+          metadata: {}
+        };
+      }
+    }),
+    resumeThread: () => { throw new Error("unexpected resume"); },
+    cancelThread: () => false
+  };
+  const registry = createChannelRegistry({ root, definitionsPath, adapterFactory: () => adapter });
+  registry.ensureDefaults();
+  registry.send("kaylas-store", "check measured total", {
+    jobId: "measured-job",
+    contextRefs: ["file:report.txt"],
+    evidenceRequired: ["file:report.txt"],
+    doneCondition: "Read report.txt and verify measured_total equals 73; a value of 12 fails."
+  });
+  const run = await registry.runNext();
+  assert.strictEqual(run.result.code, "OBJECTIVE_UNVERIFIED");
+  assert.strictEqual(run.result.verification.actual, "12");
+}
+
+async function requiredRefFailure(definitionsPath) {
+  const registry = createChannelRegistry({ root: H.tmp("factoryv2-required-ref-"), definitionsPath });
+  registry.ensureDefaults();
+  registry.send("kaylas-store", "required ref must resolve", { jobId: "required-ref-job", primingRefs: ["capsule"], requiredRefs: ["file:missing.txt"] });
+  const run = await registry.runNext();
+  assert.strictEqual(run.result.code, "CONTEXT_MISSING");
+}
+
+async function realJarvisPackRefsResolve(definitionsPath, dir) {
+  for (const [kind, body] of [
+    ["store", "store fact: kaylas conversion source\n"],
+    ["project", "project fact: kaylas scoped workspace\n"],
+    ["active-priorities", "priority: improve conversion clarity\n"],
+    ["project-memory", "memory: Kaylas uses Shopify source truth\n"],
+    ["daily-log", "log: no live business write performed\n"],
+    ["skill", "commerce analytics skill source\n"],
+  ]) {
+    const folder = path.join(dir, ".factoryv2", "context", kind);
+    fs.mkdirSync(folder, { recursive: true });
+    fs.writeFileSync(path.join(folder, kind === "skill" ? "commerce-analytics.md" : "kaylas.md"), body);
+  }
+  const root = H.tmp("factoryv2-real-pack-refs-");
+  const registry = createChannelRegistry({ root, definitionsPath });
+  registry.ensureDefaults();
+  const refs = ["project:kaylas", "store:kaylas", "active-priorities:kaylas", "project-memory:kaylas", "daily-log:kaylas", "skill:commerce-analytics"];
+  registry.send("kaylas-store", "resolve real Kaylas pack refs", {
+    jobId: "real-pack-refs",
+    primingRefs: refs,
+    deterministic: { kind: "invoice-compare", records: [] }
+  });
+  await registry.runNext();
+  const context = journal.load(root).events.find((event) => event.type === "channel.context.resolved" && event.jobId === "real-pack-refs");
+  assert.deepStrictEqual(context.manifest.refs.map((ref) => ref.ref), refs);
+  assert.ok(context.manifest.refs.every((ref) => ref.sha256 && ref.bytes > 0));
+}
+
+async function sessionPathCannotEscape(definitionsPath) {
+  const root = H.tmp("factoryv2-session-path-");
+  const registry = createChannelRegistry({ root, definitionsPath });
+  registry.ensureDefaults();
+  registry.send("invoice-audit", "path safety", { jobId: "../../snapshot", deterministic: { kind: "invoice-compare", records: [] } });
+  await registry.runNext();
+  assert.strictEqual(fs.existsSync(path.join(root, "snapshot.json")), false);
+  assert.strictEqual(fs.existsSync(path.join(root, "sessions", "invoice-audit", "..", "..", "snapshot.json")), false);
+  const sessionFiles = fs.readdirSync(path.join(root, "sessions", "invoice-audit"));
+  assert.strictEqual(sessionFiles.length, 1);
+  assert.match(sessionFiles[0], /^[0-9a-f]{64}\.json$/);
+}
+
 function errorCode(code) {
   return (error) => error?.code === code;
 }
@@ -137,6 +381,43 @@ function rpc(socketPath, method, params) {
     request.on("error", reject);
     request.end(body);
   });
+}
+
+function localRpc(registry, method, params) {
+  const body = Buffer.from(JSON.stringify({ id: "test", method, params }));
+  const request = new MockRequest(body);
+  const response = new MockResponse();
+  return handle(request, response, createChannelTools(registry)).then(() => JSON.parse(response.body));
+}
+
+class MockRequest {
+  constructor(body) {
+    this.method = "POST";
+    this.url = "/rpc";
+    this.handlers = {};
+    process.nextTick(() => {
+      this.handlers.data?.(body);
+      this.handlers.end?.();
+    });
+  }
+  on(event, handler) {
+    this.handlers[event] = handler;
+    return this;
+  }
+  destroy() {}
+}
+
+class MockResponse {
+  constructor() {
+    this.body = "";
+  }
+  writeHead(status, headers) {
+    this.status = status;
+    this.headers = headers;
+  }
+  end(body) {
+    this.body = body;
+  }
 }
 
 main().catch((error) => {
