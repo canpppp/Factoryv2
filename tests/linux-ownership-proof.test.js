@@ -33,13 +33,15 @@ async function main() {
   }
   console.log("Linux ownership backend:", spawnSync("/usr/bin/bwrap", ["--version"], { encoding: "utf8" }).stdout.trim());
   const evidence = [];
-  for (const mode of ["cancel", "timeout", "overflow", "exit", "owner-loss", "client-loss", "channel-cancel"]) {
+  for (const mode of ["cancel", "timeout", "overflow", "exit", "owner-loss", "client-loss", "channel-cancel", "cleanup-unknown", "race"]) {
     const dir = H.tmp("factory-linux-owned-");
     const token = randomUUID(), expiry = Date.now() + 18000;
-    const provider = fixtureProfile(path.join(__dirname, "fixtures/linux-ownership-worker.js"), { readRoots: [dir], writeRoots: [dir] });
+    const provider = fixtureProfile(path.join(__dirname, "fixtures/linux-ownership-worker.js"), { readRoots: [dir], writeRoots: [dir], limits: { killGraceMs: 100, cleanupMs: 2000 } });
     const configPath = path.join(dir, "config.json"), report = path.join(dir, "watchdog.json");
-    const channel = mode === "client-loss" || mode === "channel-cancel";
-    fs.writeFileSync(configPath, JSON.stringify({ dir, root: H.tmp("factory-linux-api-"), expiry, provider, mode, timeoutMs: mode === "timeout" ? 1800 : 8000, limits: { lineBytes: 1024, killGraceMs: 100, cleanupMs: 2000 } }));
+    const channel = ["client-loss", "channel-cancel", "cleanup-unknown"].includes(mode);
+    const root = H.tmp("factory-linux-api-");
+    const config = { dir, root, expiry, provider, mode, timeoutMs: ["timeout", "race"].includes(mode) ? 1800 : 8000, limits: { lineBytes: 1024, killGraceMs: 100, cleanupMs: 2000 } };
+    fs.writeFileSync(configPath, JSON.stringify(config));
     const watchdog = start("linux-ownership-watchdog.js", [token, String(expiry - 2000), report]);
     await until(() => watchdog.messages.length);
     const owner = start(channel ? "linux-ownership-daemon.js" : "linux-ownership-owner.js", [configPath, token]);
@@ -48,7 +50,7 @@ async function main() {
     const controlClosed = new Promise((resolve) => control.on("close", resolve));
     const controlIdentity = identity(control.pid);
     const namespaces = new Set();
-    let captured = [], atSettlement = [], result, testError, client;
+    let captured = [], atSettlement = [], result, testError, client, attempt, replacement;
     try {
       if (channel) {
         const api = await until(() => owner.messages.find((item) => item.type === "api"));
@@ -68,6 +70,14 @@ async function main() {
       const workers = captured.filter((item) => namespaces.has(item.namespace) && item.state !== "Z");
       assert.ok(workers.length >= 4, "host sees namespace init plus worker, detached child and grandchild");
       assert.ok(new Set(workers.map((item) => item.session)).size >= 3, "descendants really created separate sessions");
+      for (const local of locals.slice(1)) {
+        const descendant = workers.find((item) => item.namespacePids.at(-1) === local.pid);
+        assert.ok(descendant, "each namespace-local fixture identity maps to a host PID/start time");
+        assert.equal(fs.readlinkSync(`/proc/${descendant.pid}/fd/1`), "/dev/null", "detached descendant closed inherited output pipe");
+        signal(descendant, "SIGTERM");
+        await sleep(25);
+        assert.ok(same(descendant) && same(descendant).state !== "Z", "fixture really ignores TERM");
+      }
       if (mode === "client-loss") {
         assert.equal(signal(client.saved, "SIGKILL"), true);
         await client.closed;
@@ -82,18 +92,25 @@ async function main() {
         await until(() => inventory(token, [...namespaces]).filter((item) => namespaces.has(item.namespace) && item.state !== "Z").length === 0);
         assert.equal(owner.messages.filter((item) => item.type === "settled").length, 0, "owner loss is not successful job completion");
       } else {
-        if (mode === "cancel" || mode === "channel-cancel") { owner.child.send("cancel"); owner.child.send("cancel"); }
+        if (["cancel", "channel-cancel", "cleanup-unknown", "race"].includes(mode)) { owner.child.send("cancel"); owner.child.send("cancel"); }
         if (mode === "overflow") await until(() => owner.messages.some((item) => item.type === "settled"));
         const settlement = await until(() => owner.messages.find((item) => item.type === "settled"));
         result = settlement.result;
+        attempt = settlement.attempt;
         atSettlement = inventory(token, [...namespaces]).filter((item) => namespaces.has(item.namespace) && item.state !== "Z");
         assert.deepEqual(atSettlement, [], "settlement cannot precede active namespace cleanup");
         if (!channel) {
           assert.equal(settlement.namespaces.length, 1, "owner observed containment before settlement");
           assert.deepEqual(settlement.atSettlement, [], "wrapper promise settlement has no active owned namespace member");
-          assert.equal(result.cause, { cancel: "CANCELLED", timeout: "TIMEOUT", overflow: "OUTPUT_LIMIT", exit: "EXIT" }[mode]);
+          if (mode === "race") assert.ok(["CANCELLED", "TIMEOUT", "OUTPUT_LIMIT"].includes(result.cause));
+          else assert.equal(result.cause, { cancel: "CANCELLED", timeout: "TIMEOUT", overflow: "OUTPUT_LIMIT", exit: "EXIT" }[mode]);
         } else if (mode === "client-loss") assert.equal(result.ok, true, JSON.stringify(result));
-        else { assert.equal(result.code, "CANCELLED"); assert.equal(result.receipt.sessionId, null, "cancel precedes any provider session ID"); }
+        else {
+          assert.equal(attempt.code, mode === "cleanup-unknown" ? "CLEANUP_FAILED" : "CANCELLED");
+          assert.equal(attempt.receipt.sessionId, null, "cancel precedes any provider session ID");
+          assert.equal(attempt.receipt.metadata.ownedRunSettled, mode !== "cleanup-unknown");
+          assert.equal(attempt.receipt.metadata.externalEffects, "UNKNOWN");
+        }
         if (mode === "overflow" || mode === "timeout") owner.child.send("cancel");
         await sleep(80);
         assert.equal(owner.messages.filter((item) => item.type === "settled").length, 1);
@@ -102,6 +119,30 @@ async function main() {
           assert.ok(result.events.every((item) => item.token === token));
         }
         assert.ok(same(owner.saved), "execution owner remains alive after settlement");
+        if (mode === "cleanup-unknown") {
+          const { createChannelRegistry } = require("../src/channels");
+          const restarted = createChannelRegistry({ root, definitionsPath: path.join(root, "channels.json") });
+          restarted.ensureDefaults();
+          for (const action of [() => restarted.send("proof", "retry"), () => restarted.resume("proof")]) assert.throws(action, { code: "WORKER_CLEANUP_BLOCKED" });
+          assert.equal(restarted.status("proof").workerBlocked.code, "CLEANUP_FAILED");
+        }
+        if (mode === "channel-cancel") {
+          client.child.send("finish"); await client.closed;
+          const nextDir = path.join(dir, "next"); fs.mkdirSync(nextDir);
+          const nextConfig = path.join(dir, "next-config.json");
+          fs.writeFileSync(nextConfig, JSON.stringify({ ...config, dir: nextDir, mode: "client-loss" }));
+          const api = owner.messages.find((item) => item.type === "api");
+          client = start("linux-ownership-client.js", [nextConfig, token, api.socketPath]);
+          await until(() => fs.existsSync(path.join(nextDir, "grandchild.json")));
+          await sleep(30);
+          assert.equal(owner.messages.filter((item) => item.type === "settled").length, 1, "late first-attempt output cannot finish replacement");
+          fs.writeFileSync(path.join(nextDir, "go"), "go");
+          replacement = await until(() => owner.messages.filter((item) => item.type === "settled")[1]);
+          assert.equal(replacement.result.ok, true, JSON.stringify(replacement));
+          assert.notEqual(replacement.attempt.jobId, attempt.jobId);
+          assert.notEqual(replacement.attempt.receipt.metadata.runId, attempt.receipt.metadata.runId);
+          assert.equal(replacement.result.structured.jobId, replacement.attempt.jobId);
+        }
       }
       assert.equal(same(controlIdentity)?.state === "Z", false, "unrelated control survives");
       assert.ok(same(controlIdentity));
@@ -110,16 +151,16 @@ async function main() {
       if (owner.child.connected) { owner.child.send("cancel"); owner.child.send("finish"); }
       if (client?.child.connected) client.child.send("finish");
       if (client) await client.closed;
+      if (control.connected) control.send("finish"); await controlClosed;
       // On a failed proof the independent watchdog owns last-resort cleanup.
       if (testError) await watchdog.closed;
       await owner.closed;
-      if (control.connected) control.send("finish"); await controlClosed;
       if (watchdog.child.connected) watchdog.child.send("finish");
       await watchdog.closed;
     }
     if (!fs.existsSync(report)) console.error("OWNERSHIP_HARNESS_FAILURE", JSON.stringify({ mode, testError: testError?.stack, owner: owner.output, ownerMessages: owner.messages, watchdog: watchdog.output, watchdogExit: await watchdog.closed }));
     const guarded = JSON.parse(fs.readFileSync(report));
-    evidence.push({ mode, captured, namespaces: [...namespaces], atSettlement, result, watchdog: guarded, control: controlIdentity, error: testError?.message });
+    evidence.push({ mode, captured, namespaces: [...namespaces], atSettlement, result, attempt, replacement, watchdog: guarded, control: controlIdentity, error: testError?.message });
     console.log("OWNERSHIP_EVIDENCE", JSON.stringify(evidence.at(-1)));
     assert.deepEqual(guarded.interventions, [], "watchdog intervention is failure, never certified cleanup");
     assert.deepEqual(guarded.remaining, []);

@@ -29,7 +29,7 @@ if (role === "leader") {
   const poll = setInterval(() => {
     if (!fs.existsSync(`${dir}/go`)) return;
     clearInterval(poll);
-    if (mode === "overflow") process.stdout.write("x".repeat(8192));
+    if (mode === "overflow" || mode === "race") process.stdout.write("x".repeat(8192));
     else if (mode === "exit" || mode === "client-loss") {
       if (context) {
         const result = { done: true, channelId: context.envelope.channel, jobId: context.jobId, contextManifestSha256: context.manifest.sha256, evidence: ["synthetic-client-loss"], summary: "completed after client exit" };

@@ -9,7 +9,9 @@ function identity(pid) {
     let namespace = null;
     try { namespace = fs.readlinkSync(`/proc/${pid}/ns/pid`); }
     catch (error) { if (!["ENOENT", "ESRCH"].includes(error.code)) throw error; }
-    return { pid: Number(pid), start: fields[19], state: fields[0], ppid: Number(fields[1]), group: Number(fields[2]), session: Number(fields[3]), namespace };
+    const status = fs.readFileSync(`/proc/${pid}/status`, "utf8");
+    const namespacePids = status.match(/^NSpid:\s+(.+)$/m)?.[1].trim().split(/\s+/).map(Number) || [];
+    return { pid: Number(pid), start: fields[19], state: fields[0], ppid: Number(fields[1]), group: Number(fields[2]), session: Number(fields[3]), namespace, namespacePids };
   } catch (error) { if (["ENOENT", "ESRCH"].includes(error.code)) return null; throw error; }
 }
 
