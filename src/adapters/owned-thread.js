@@ -24,7 +24,7 @@ function createOwnedAdapter(engine, config, buildArgs, makeReceipt) {
         let runKey;
         try {
           if (cancelled) throw Object.assign(new Error("worker cancelled before spawn"), { code: "CANCELLED" });
-          const args = buildArgs({ cwd: profile.cwd, readOnly: !profile.writeRoots.length, allowedTools: profile.tools, model: profile.model, maxTurns: profile.maxTurns, sessionId, newSessionId: engine === "claude" && !sessionId ? id : null, threadId: sessionId });
+          const args = buildArgs({ cwd: profile.cwd, readOnly: !profile.writeRoots.length, allowedTools: profile.tools, disallowedTools: profile.disallowedTools, model: profile.model, maxTurns: profile.maxTurns, sessionId, newSessionId: engine === "claude" && !sessionId ? id : null, threadId: sessionId });
           const prepared = prepareWorker(profile, args);
           hooks.onPolicy?.({ profileDigest: profile.digest, executableSha256: profile.executableSha256, engine, synthetic: profile.synthetic });
           if (id) { sessions.set(id, profile.digest); hooks.onThreadId?.(id); }

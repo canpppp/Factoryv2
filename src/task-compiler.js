@@ -33,6 +33,7 @@ function compileTask(channel, input = {}) {
     budgets: { tokenBudget, timeoutMs },
     priority: PRIORITIES.has(input.priority) ? input.priority : "normal",
     requestedTools: boundedList(input.requestedTools, 12, 100),
+    ...(input.disallowedTools == null ? {} : { disallowedTools: boundedList(input.disallowedTools, 12, 100) }),
     ...(input.readRoots == null ? {} : { readRoots: boundedList(input.readRoots, 12, 1000) }),
     ...(input.writeRoots == null ? {} : { writeRoots: boundedList(input.writeRoots, 12, 1000) }),
     ...(input.outputLimits == null ? {} : { outputLimits: { ...input.outputLimits } }),

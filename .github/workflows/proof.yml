@@ -10,9 +10,15 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
       - name: Install worker confinement backend
         run: sudo apt-get update && sudo apt-get install -y bubblewrap
+      - name: Reproduce R1 and R2 on reviewed baseline (synthetic Linux only)
+        run: node tests/m02-r1-proof.test.js --baseline
+      - name: Focused R1 and R2 consumer regressions
+        run: node tests/m02-r1-proof.test.js
       - run: npm test

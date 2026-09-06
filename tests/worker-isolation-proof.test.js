@@ -58,6 +58,16 @@ async function main() {
     const resumed = await submit(f);
     assert.equal(resumed.run.result.ok, true); assert.equal(f.current.status("proof").sessionId, id);
     assert.equal(resumed.run.result.receipt.metadata.profileDigest, digest);
+    const reduced = await submit(f, f.request, { disallowedTools: ["Read"] });
+    assert.equal(reduced.run.result.ok, true);
+    assert.equal(JSON.parse(reduced.run.result.summary).tools, "");
+    assert.ok(JSON.parse(reduced.run.result.summary).disallowedTools.split(",").includes("Read"));
+    assert.notEqual(reduced.run.result.receipt.metadata.profileDigest, digest);
+    const reducedId = f.current.status("proof").sessionId;
+    assert.notEqual(reducedId, id);
+    const reducedResume = await submit(f, f.request, { disallowedTools: ["Read"] });
+    assert.equal(reducedResume.run.result.ok, true);
+    assert.equal(f.current.status("proof").sessionId, reducedId);
     const writable = await submit(f, f.request, { readWriteBoundary: "workspace-write", requestedTools: ["Read", "Write"] });
     assert.equal(writable.run.result.ok, true);
     assert.equal(JSON.parse(writable.run.result.summary).write.ok, true);

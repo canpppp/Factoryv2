@@ -184,6 +184,7 @@ function createChannelRegistry({ root, adapterFactory = (config) => createAdapte
         cwd: channel.cwd,
         readOnly: channel.readWriteProfile === "read-only" || job.envelope?.readWriteBoundary === "read-only",
         allowedTools: job.envelope?.requestedTools || [],
+        disallowedTools: job.envelope?.disallowedTools,
         readRoots: job.envelope?.readRoots,
         writeRoots: job.envelope?.writeRoots,
         limits: job.envelope?.outputLimits,

@@ -40,6 +40,7 @@ if (argv[0] === "--tree-child") {
       ambient: ["FACTORY_M0_SENTINEL", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "NODE_OPTIONS", "CLAUDE_CODE_OAUTH_TOKEN"].filter((key) => process.env[key]),
       path: process.env.PATH, home: process.env.HOME,
       tools: index < 0 ? null : argv[index + 1],
+      disallowedTools: argv.includes("--disallowedTools") ? argv[argv.indexOf("--disallowedTools") + 1] : null,
       safe: argv.includes("--safe-mode") && argv.includes("--restricted") && argv.includes("--strict-mcp-config"),
       shell: spawnSync("/bin/sh", ["-c", "exit 0"], { encoding: "utf8" }).status
     };

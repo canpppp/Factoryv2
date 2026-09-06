@@ -22,7 +22,7 @@ async function proveClaude() {
   assert.strictEqual(first.finalResponse, "claude:first");
   assert.strictEqual(first.metadata.inputTokens, 11);
   assert.strictEqual(first.metadata.cacheReadTokens, 5);
-  const resumed = await adapter.resumeThread(captured, { cwd: __dirname, readOnly: true, allowedTools: ["Read"] }).run("second");
+  const resumed = await adapter.resumeThread(captured, { cwd: __dirname, readOnly: true, allowedTools: ["Read"], disallowedTools: ["WebFetch"] }).run("second");
   assert.strictEqual(resumed.sessionId, captured);
   assert.strictEqual(resumed.finalResponse, "claude:second");
 

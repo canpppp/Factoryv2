@@ -20,6 +20,13 @@ function roots(requested, granted) {
   return result;
 }
 
+function toolNames(value, name) {
+  if (value == null) return [];
+  if (!Array.isArray(value) || value.some((tool) => typeof tool !== "string")) fail(`${name} must be a list of tool names`);
+  if (value.some((tool) => !/^[A-Za-z][A-Za-z0-9_]*$/.test(tool))) fail(`${name} supports exact tool names only`, "ISOLATION_UNSUPPORTED");
+  return value;
+}
+
 function compileWorkerPolicy(engine, config, options) {
   const configured = config.workerPolicy || options.workerPolicy;
   if (!configured) fail("explicit worker isolation profile is required", "ISOLATION_UNSUPPORTED");
@@ -42,9 +49,17 @@ function compileWorkerPolicy(engine, config, options) {
   const grantedWrite = (spec.writeRoots || []).map(canonical);
   const readRoots = roots(options.readRoots || grantedRead, grantedRead);
   const writeRoots = options.readOnly ? [] : roots(options.writeRoots || grantedWrite, grantedWrite);
-  const tools = [...new Set(options.allowedTools || [])].sort();
-  const permitted = spec.tools || [];
-  if (tools.some((tool) => !permitted.includes(tool))) fail("job tools exceed channel worker policy");
+  if (process.platform === "linux" && writeRoots.some((write) => !readRoots.some((read) => within(write, read)))) fail("Linux write binds require covering read authority", "ISOLATION_UNSUPPORTED");
+  const requestedTools = toolNames(options.allowedTools ?? config.allowedTools, "allowedTools");
+  const disallowedTools = [...new Set([
+    ...toolNames(spec.disallowedTools, "policy disallowedTools"),
+    ...toolNames(config.disallowedTools, "config disallowedTools"),
+    ...toolNames(options.disallowedTools, "disallowedTools")
+  ])].sort();
+  if (engine !== "claude" && disallowedTools.length) fail("adapter cannot enforce explicit tool denials", "ISOLATION_UNSUPPORTED");
+  const permitted = toolNames(spec.tools, "policy tools");
+  if (requestedTools.some((tool) => !permitted.includes(tool))) fail("job tools exceed channel worker policy");
+  const tools = [...new Set(requestedTools.filter((tool) => !disallowedTools.includes(tool)))].sort();
   const supported = ["Read", "Glob", "Grep", "Edit", "Write"];
   if (!synthetic && tools.some((tool) => !supported.includes(tool))) fail("requested tool cannot be confined by this adapter", "ISOLATION_UNSUPPORTED");
   if (!writeRoots.length && tools.some((tool) => ["Edit", "Write", "NotebookEdit"].includes(tool))) fail("write tools require write roots");
@@ -59,7 +74,7 @@ function compileWorkerPolicy(engine, config, options) {
   const runtimeReadRoots = (spec.runtimeReadRoots || []).map(canonical);
   if (!synthetic && runtimeReadRoots.length) fail("custom runtime exceptions require adapter validation", "ISOLATION_UNSUPPORTED");
   const profile = {
-    version: 1, channelId: options.channelId || null, engine, executable, executableSha256, entrypoint, entrypointSha256, synthetic, cwd, tools, readRoots, writeRoots,
+    version: 2, channelId: options.channelId || null, engine, executable, executableSha256, entrypoint, entrypointSha256, synthetic, cwd, tools, disallowedTools, readRoots, writeRoots,
     stateRoot, runtimeReadRoots, sandbox, timeoutMs, limits,
     model: options.model || config.model || null, maxTurns: options.maxTurns || config.maxTurns || 12,
     auth: { mode: spec.auth.mode, source: synthetic ? null : spec.auth.tokenEnv },
@@ -115,7 +130,7 @@ function prepareWorker(profile, args) {
     // Network access is not delegated by this packet. Live provider egress needs M0.3 validation.
     return { command: profile.sandbox, args: ["-p", rules.join("\n"), profile.executable, ...args], env, redact };
   }
-  const wrapped = ["--die-with-parent", "--unshare-all", "--new-session", "--proc", "/proc", "--dev", "/dev"];
+  const wrapped = ["--die-with-parent", "--unshare-all", "--new-session", "--proc", "/proc", "--dev", "/dev", "--dir", profile.cwd];
   for (const root of reads) wrapped.push("--ro-bind", root, root);
   for (const root of [home, ...profile.writeRoots]) wrapped.push("--bind", root, root);
   wrapped.push("--chdir", profile.cwd, "--", profile.executable, ...args);
