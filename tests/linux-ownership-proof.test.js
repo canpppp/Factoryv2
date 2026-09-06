@@ -13,7 +13,7 @@ async function main() {
   const path = require("node:path");
   const { fork, spawnSync } = require("node:child_process");
   const { randomUUID } = require("node:crypto");
-  const { identity, same, inventory, signal } = require("./fixtures/linux-ownership-host");
+  const { identity, same, inventory, signal, pin } = require("./fixtures/linux-ownership-host");
   const { fixtureProfile } = require("./fixtures/isolated-profile");
   const H = require("./helpers");
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -50,6 +50,7 @@ async function main() {
     const controlClosed = new Promise((resolve) => control.on("close", resolve));
     const controlIdentity = identity(control.pid);
     const namespaces = new Set();
+    const namespacePins = [];
     let captured = [], atSettlement = [], result, testError, client, attempt, replacement;
     try {
       if (channel) {
@@ -64,11 +65,19 @@ async function main() {
       assert.ok(locals.every((item) => item.token === token));
       const hostNamespace = identity(process.pid).namespace;
       captured = inventory(token).filter((item) => item.pid !== watchdog.child.pid);
-      captured.forEach((item) => { if (item.namespace && item.namespace !== hostNamespace) namespaces.add(item.namespace); });
+      captured.forEach((item) => {
+        if (item.namespace && item.namespace !== hostNamespace && !namespaces.has(item.namespace)) {
+          namespacePins.push(pin(item)); namespaces.add(item.namespace);
+        }
+      });
       assert.equal(namespaces.size, 1, "one owned worker PID namespace");
       captured = inventory(token, [...namespaces]).filter((item) => item.pid !== watchdog.child.pid);
       const workers = captured.filter((item) => namespaces.has(item.namespace) && item.state !== "Z");
       assert.ok(workers.length >= 4, "host sees namespace init plus worker, detached child and grandchild");
+      const init = workers.find((item) => item.namespacePids.at(-1) === 1);
+      const monitor = identity(init.ppid);
+      assert.equal(monitor.ppid, owner.child.pid, "namespace init -> bwrap monitor -> exact execution owner");
+      if (!captured.some((item) => item.pid === monitor.pid)) captured.push(monitor);
       assert.ok(new Set(workers.map((item) => item.session)).size >= 3, "descendants really created separate sessions");
       for (const local of locals.slice(1)) {
         const descendant = workers.find((item) => item.namespacePids.at(-1) === local.pid);
@@ -84,6 +93,10 @@ async function main() {
         await sleep(80);
         assert.ok(same(owner.saved), "daemon owner survives outer client loss");
         assert.ok(inventory(token, [...namespaces]).some((item) => namespaces.has(item.namespace) && item.state !== "Z"), "job remains alive after client death");
+      }
+      if (mode === "race") {
+        const spawn = owner.messages.find((item) => item.type === "spawn");
+        await sleep(Math.max(0, spawn.deadline - Date.now() - 5));
       }
       fs.writeFileSync(path.join(dir, "go"), "go");
       if (mode === "owner-loss") {
@@ -157,6 +170,7 @@ async function main() {
       await owner.closed;
       if (watchdog.child.connected) watchdog.child.send("finish");
       await watchdog.closed;
+      namespacePins.forEach((fd) => fs.closeSync(fd));
     }
     if (!fs.existsSync(report)) console.error("OWNERSHIP_HARNESS_FAILURE", JSON.stringify({ mode, testError: testError?.stack, owner: owner.output, ownerMessages: owner.messages, watchdog: watchdog.output, watchdogExit: await watchdog.closed }));
     const guarded = JSON.parse(fs.readFileSync(report));

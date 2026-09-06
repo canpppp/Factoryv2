@@ -20,6 +20,15 @@ function same(saved) {
   return current?.start === saved.start ? current : null;
 }
 
+function pin(saved) {
+  if (same(saved)?.namespace !== saved.namespace) throw new Error("namespace identity changed before pin");
+  const fd = fs.openSync(`/proc/${saved.pid}/ns/pid`, "r");
+  if (fs.readlinkSync(`/proc/self/fd/${fd}`) !== saved.namespace || same(saved)?.namespace !== saved.namespace) {
+    fs.closeSync(fd); throw new Error("namespace identity changed during pin");
+  }
+  return fd;
+}
+
 function inventory(token, namespaces = []) {
   const result = [];
   for (const name of fs.readdirSync("/proc")) {
@@ -46,8 +55,9 @@ function inventory(token, namespaces = []) {
 function signal(saved, signalName) {
   const current = same(saved);
   if (!current || current.state === "Z") return false;
+  if (current.namespace !== saved.namespace) throw new Error("signal target namespace changed");
   process.kill(current.pid, signalName);
   return true;
 }
 
-module.exports = { identity, same, inventory, signal };
+module.exports = { identity, same, inventory, signal, pin };
