@@ -77,11 +77,11 @@ function createChannelRegistry({ root, adapterFactory = (config) => createAdapte
     return channel;
   }
 
-  function result(channelId, jobId = null) {
+  function result(channelId, jobId = null, options = {}) {
     const channel = status(channelId);
     if (!jobId) return channel.latestResult;
     const found = findJobResult(root, channel.id, jobId) || { ok: false, code: "RESULT_NOT_FOUND", jobId };
-    journal.append(root, { type: "channel.result.retrieved", channelId: channel.id, jobId, ok: !!found.ok, verified: !!found.verified, origin: "factoryv2" });
+    journal.append(root, { type: "channel.result.retrieved", channelId: channel.id, jobId, ok: !!found.ok, verified: !!found.verified, origin: "factoryv2", evidenceOrigin: options.source === "jarvis-bridge" ? "jarvis-bridge" : "direct-registry" });
     return found;
   }
 
@@ -97,9 +97,10 @@ function createChannelRegistry({ root, adapterFactory = (config) => createAdapte
       if (duplicate.envelope?.payloadDigest !== envelope.payloadDigest) throw channelError("idempotency key reused with a different canonical payload", "IDEMPOTENCY_PAYLOAD_MISMATCH");
       return duplicate;
     }
-    const job = { id: jobId, requestId: envelope.requestId, prompt: envelope.objective, envelope, queuedAt: new Date().toISOString(), kind: options.kind || channel.modelPolicy?.kind || "implementation", deterministic: options.deterministic || null, attempt: 1, contextManifest: null };
+    const evidenceOrigin = options.source === "jarvis-bridge" ? "jarvis-bridge" : (options.deterministic ? "deterministic" : "provider");
+    const job = { id: jobId, requestId: envelope.requestId, prompt: envelope.objective, envelope, queuedAt: new Date().toISOString(), kind: options.kind || channel.modelPolicy?.kind || "implementation", deterministic: options.deterministic || null, attempt: 1, contextManifest: null, evidenceOrigin };
     journal.append(root, { type: "channel.job.admitted", channelId, jobId, requestId: envelope.requestId, payloadDigest: envelope.payloadDigest, origin: "factoryv2" });
-    journal.append(root, { type: "channel.job.queued", channelId, job, origin: "factoryv2" });
+    journal.append(root, { type: "channel.job.queued", channelId, job, origin: "factoryv2", evidenceOrigin });
     return job;
   }
 
@@ -171,7 +172,7 @@ function createChannelRegistry({ root, adapterFactory = (config) => createAdapte
       if (deterministic.canRun(job)) {
         const result = { ...deterministic.run(job), jobId: job.id, deterministic: true, verified: true, contextManifestSha256: context.manifest.sha256, finishedAt: new Date().toISOString() };
         persistSession(root, channel.id, job, result, context.manifest);
-        journal.append(root, { type: "channel.job.finished", channelId: channel.id, jobId: job.id, result, origin: "factoryv2" });
+        journal.append(root, { type: "channel.job.finished", channelId: channel.id, jobId: job.id, result, origin: "factoryv2", evidenceOrigin: "deterministic" });
         return { progressed: true, channelId: channel.id, result };
       }
       const policy = modelRouter.route({ kind: job.kind, engine: channel.engine, failedRepairs: job.failedRepairs || 0, preferred: job.modelFallback });
@@ -187,6 +188,7 @@ function createChannelRegistry({ root, adapterFactory = (config) => createAdapte
       const sessionId = channel.sessionId || null;
       const agentThread = sessionId ? adapter.resumeThread(sessionId, options) : adapter.startThread(options);
       const prompt = channelPrompt(channel, job, context);
+      journal.append(root, { type: "channel.worker.input", channelId: channel.id, jobId: job.id, contextManifestSha256: context.manifest.sha256, resolvedRefs: context.manifest.refs.map((ref) => ref.ref), origin: "factoryv2", evidenceOrigin: "provider" });
       const runner = { adapter, sessionId, action: null };
       active.set(channel.id, runner);
       try {
@@ -231,7 +233,7 @@ function createChannelRegistry({ root, adapterFactory = (config) => createAdapte
         }
         const result = { ok: true, jobId: job.id, verified: true, summary: verification.summary, evidence: verification.evidence, structured: verification.structured, receipt: compactReceipt(receipt), finishedAt: new Date().toISOString() };
         persistSession(root, channel.id, job, result, context.manifest);
-        journal.append(root, { type: "channel.job.finished", channelId: channel.id, jobId: job.id, result, origin: "factoryv2" });
+        journal.append(root, { type: "channel.job.finished", channelId: channel.id, jobId: job.id, result, origin: "factoryv2", evidenceOrigin: "provider" });
         return { progressed: true, channelId: channel.id, result };
       } catch (error) {
         const interruption = settleInterruption(root, channel.id, job, runner.action);

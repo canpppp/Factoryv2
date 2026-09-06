@@ -68,9 +68,11 @@ async function main() {
   await workerFailure(fixture.definitionsPath, (ids) => JSON.stringify({ done: true, channelId: ids.channelId, jobId: "other-job", summary: "wrong", evidence: ["proof"], contextManifestSha256: ids.manifestSha }), "WRONG_JOB");
   await workerFailure(fixture.definitionsPath, (ids) => JSON.stringify({ done: true, channelId: ids.channelId, jobId: ids.jobId, summary: "completed analysis", evidence: [], contextManifestSha256: ids.manifestSha }), "EVIDENCE_MISSING");
   await workerFailure(fixture.definitionsPath, (ids) => JSON.stringify({ done: true, channelId: ids.channelId, jobId: ids.jobId, summary: "created report", evidence: ["file:missing-report.txt"], contextManifestSha256: ids.manifestSha }), "EVIDENCE_UNSUPPORTED", { evidenceRequired: ["file:missing-report.txt"] });
+  await workerFailure(fixture.definitionsPath, (ids) => JSON.stringify({ done: true, channelId: ids.channelId, jobId: ids.jobId, summary: "completed analysis", evidence: ["file:report.txt"], contextManifestSha256: ids.manifestSha }), "ACCEPTANCE_UNSUPPORTED", { evidenceRequired: ["file:report.txt"], contextRefs: ["file:report.txt"], acceptanceProfile: [] });
   await workerFailure(fixture.definitionsPath, (ids) => JSON.stringify({ done: true, channelId: ids.channelId, jobId: ids.jobId, summary: "I cannot access the source or create the required report.", evidence: ["proof"], contextManifestSha256: ids.manifestSha }), "OBJECTIVE_UNVERIFIED");
   await workerFailure(fixture.definitionsPath, (ids) => JSON.stringify({ done: true, channelId: ids.channelId, jobId: ids.jobId, summary: "refused", evidence: ["proof"], refusal: true, contextManifestSha256: ids.manifestSha }), "WORKER_UNAVAILABLE");
   await measuredTotalPredicateFails(fixture.definitionsPath, fixture.dir);
+  await rpcAcceptanceProfileIsEnforced(fixture.definitionsPath, fixture.dir);
 
   const badPath = path.join(fixture.dir, "bad-channels.json");
   fs.writeFileSync(badPath, JSON.stringify([{ id: "missing", name: "Missing", cwd: path.join(fixture.dir, "absent"), engine: "claude", writeAuthority: "none" }]));
@@ -203,10 +205,50 @@ async function workerFailure(definitionsPath, responseFor, code, options = {}) {
   };
   const registry = createChannelRegistry({ root, definitionsPath, adapterFactory: () => adapter });
   registry.ensureDefaults();
-  registry.send("kaylas-store", `worker failure ${code}`, { jobId: `worker-${code}`, evidenceRequired: options.evidenceRequired || ["proof"] });
+  if (options.contextRefs?.includes("file:report.txt")) fs.writeFileSync(path.join(path.dirname(definitionsPath), "report.txt"), "measured_total=12\n");
+  registry.send("kaylas-store", `worker failure ${code}`, { jobId: `worker-${code}`, evidenceRequired: options.evidenceRequired || ["proof"], contextRefs: options.contextRefs || [], acceptanceProfile: options.acceptanceProfile });
   const run = await registry.runNext();
   assert.strictEqual(run.result.code, code);
   assert.strictEqual(registry.result("kaylas-store", `worker-${code}`).code, code);
+}
+
+async function rpcAcceptanceProfileIsEnforced(definitionsPath, dir) {
+  const root = H.tmp("factoryv2-rpc-profile-");
+  const adapter = {
+    startThread: () => ({
+      run: async (prompt, hooks) => {
+        hooks.onThreadId("rpc-profile-session");
+        const hashes = [...prompt.matchAll(/"sha256":"([0-9a-f]{64})"/g)].map((match) => match[1]);
+        const jobId = prompt.match(/^JOB ([^\n]+)/m)?.[1];
+        return {
+          engine: "claude",
+          sessionId: "rpc-profile-session",
+          finalResponse: JSON.stringify({
+            done: true,
+            channelId: "kaylas-store",
+            jobId,
+            summary: "The report meets the required total of 73.",
+            evidence: ["file:report.txt"],
+            contextManifestSha256: hashes.at(-1)
+          }),
+          metadata: {}
+        };
+      }
+    }),
+    resumeThread: () => adapter.startThread(),
+    cancelThread: () => false
+  };
+  const registry = createChannelRegistry({ root, definitionsPath, adapterFactory: () => adapter });
+  registry.ensureDefaults();
+  const tools = createChannelTools(registry);
+  const profile = [{ type: "fieldEquals", ref: "file:report.txt", field: "measured_total", equals: "73" }];
+  fs.writeFileSync(path.join(dir, "report.txt"), "measured_total=12\n");
+  const rejected = await tools["channel.send"]({ channelId: "kaylas-store", jobId: "rpc-profile-reject", objective: "Check report", contextRefs: ["file:report.txt"], evidenceRequired: ["file:report.txt"], acceptanceProfile: profile });
+  assert.deepStrictEqual(rejected.envelope.acceptanceProfile, profile);
+  assert.strictEqual((await registry.runNext()).result.code, "OBJECTIVE_UNVERIFIED");
+  fs.writeFileSync(path.join(dir, "report.txt"), "measured_total=73\n");
+  await tools["channel.send"]({ channelId: "kaylas-store", jobId: "rpc-profile-pass", objective: "Check report", contextRefs: ["file:report.txt"], evidenceRequired: ["file:report.txt"], acceptanceProfile: profile });
+  assert.strictEqual((await registry.runNext()).result.verified, true);
 }
 
 async function measuredTotalPredicateFails(definitionsPath, dir) {

@@ -18,13 +18,15 @@ function createChannelTools(registry) {
       readWriteBoundary: params.readWriteBoundary,
       effectBoundary: params.effectBoundary,
       doneCondition: params.doneCondition,
+      acceptanceProfile: params.acceptanceProfile,
       tokenBudget: params.tokenBudget,
       timeoutMs: params.timeoutMs,
       priority: params.priority,
-      requestedTools: params.requestedTools
+      requestedTools: params.requestedTools,
+      source: "jarvis-bridge"
     }),
     "channel.status": async ({ channelId }) => summary(registry.status(channelId)),
-    "channel.result": async ({ channelId, jobId }) => registry.result(channelId, jobId),
+    "channel.result": async ({ channelId, jobId }) => registry.result(channelId, jobId, { source: "jarvis-bridge" }),
     "channel.cancel": async ({ channelId }) => controlReceipt(registry, channelId, "cancel"),
     "channel.resume": async ({ channelId }) => controlReceipt(registry, channelId, "resume")
   };

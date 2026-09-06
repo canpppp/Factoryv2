@@ -65,12 +65,13 @@ function main() {
   assert.notStrictEqual(new Map(audit.productionAudit(earlyRetrieval).map((item) => [item.id, item.status])).get("E"), "live-proved");
 
   const scoped = H.tmp("factoryv2-audit-scoped-");
-  journal.append(scoped, { type: "channel.job.queued", channelId: "jarvis-development", job: { id: "job-1" }, origin: "factoryv2" });
+  journal.append(scoped, { type: "channel.job.queued", channelId: "jarvis-development", job: { id: "job-1" }, origin: "factoryv2", evidenceOrigin: "jarvis-bridge" });
   journal.append(scoped, { type: "agent.receipt", channelId: "jarvis-development", jobId: "job-1", sessionId: "session-1", engine: "claude", origin: "live" });
   journal.append(scoped, { type: "channel.context.resolved", channelId: "jarvis-development", jobId: "job-1", origin: "factoryv2", manifest: { sha256: "a".repeat(64), refs: [{ ref: "capsule", kind: "sop", sha256: "b".repeat(64), bytes: 12 }] } });
+  journal.append(scoped, { type: "channel.worker.input", channelId: "jarvis-development", jobId: "job-1", origin: "factoryv2", evidenceOrigin: "provider", contextManifestSha256: "a".repeat(64), resolvedRefs: ["capsule"] });
   journal.append(scoped, { type: "token.usage", scope: "channel:jarvis-development:job-1", reusedSession: true, promptContextEstimate: 4, cacheReadTokens: 1, origin: "live" });
-  journal.append(scoped, { type: "channel.job.finished", channelId: "jarvis-development", jobId: "job-1", result: { ok: true, verified: true }, origin: "factoryv2" });
-  journal.append(scoped, { type: "channel.result.retrieved", channelId: "jarvis-development", jobId: "job-1", ok: true, verified: true, origin: "factoryv2" });
+  journal.append(scoped, { type: "channel.job.finished", channelId: "jarvis-development", jobId: "job-1", result: { ok: true, verified: true }, origin: "factoryv2", evidenceOrigin: "provider" });
+  journal.append(scoped, { type: "channel.result.retrieved", channelId: "jarvis-development", jobId: "job-1", ok: true, verified: true, origin: "factoryv2", evidenceOrigin: "jarvis-bridge" });
   const proved = new Map(audit.productionAudit(scoped).map((item) => [item.id, item.status]));
   assert.strictEqual(proved.get("A"), "live-proved");
   assert.strictEqual(proved.get("C"), "live-proved");

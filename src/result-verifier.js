@@ -23,6 +23,9 @@ function verifyWorkerResult({ channelId, job, receipt, contextManifest = null, r
   const manifestRefs = new Set((contextManifest?.refs || []).map((ref) => ref.ref));
   const unsupportedFiles = required.filter((ref) => /^file:/i.test(ref) && !manifestRefs.has(ref));
   if (unsupportedFiles.length) return fail("EVIDENCE_UNSUPPORTED", "file evidence must be resolved in the context manifest", { unsupported: unsupportedFiles });
+  if (job.envelope?.acceptanceRequired && !(job.envelope.acceptanceProfile || []).length) {
+    return fail("ACCEPTANCE_UNSUPPORTED", "required acceptance criteria are unsupported or empty");
+  }
   const predicate = evaluateDonePredicate(job.envelope?.acceptanceProfile || [], { evidence, resolvedContext });
   if (!predicate.ok) return predicate;
   if (contextManifest && !value.contextManifestSha256) return fail("CONTEXT_MANIFEST_UNACKED", "worker did not acknowledge resolved context manifest");

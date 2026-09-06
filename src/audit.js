@@ -9,7 +9,7 @@ function productionAudit(root) {
   const cli = fs.readFileSync(path.join(sourceRoot, "bin/factoryv2.js"), "utf8");
   const state = root ? journal.load(root) : { events: [], channels: new Map() };
   const events = state.events || [];
-  const exercised = new Set(events.filter((event) => trustedOrigin(event) && event.type === "channel.job.finished" && event.result?.verified).map((event) => event.channelId));
+  const exercised = new Set(events.filter((event) => trustedOrigin(event) && event.evidenceOrigin === "provider" && event.type === "channel.job.finished" && event.result?.verified).map((event) => event.channelId));
   const liveAgent = events.some((event) => liveReceipt(events, event));
   const daemonRestart = events.some((event) => controllerSurvival(events, event));
   const resumed = events.some((event) => resumedSession(events, event));
@@ -51,9 +51,9 @@ function resumedSession(events, event) {
 }
 
 function dispatchRetrieved(events, event) {
-  if (event.type !== "channel.result.retrieved" || !event.channelId || !event.jobId || !event.ok || !event.verified || !trustedOrigin(event)) return false;
+  if (event.type !== "channel.result.retrieved" || !event.channelId || !event.jobId || !event.ok || !event.verified || !trustedOrigin(event) || event.evidenceOrigin !== "jarvis-bridge") return false;
   const retrievedAt = Date.parse(event.at || "");
-  return events.some((candidate) => trustedOrigin(candidate) && candidate.type === "channel.job.queued" && candidate.channelId === event.channelId && candidate.job?.id === event.jobId)
+  return events.some((candidate) => trustedOrigin(candidate) && candidate.evidenceOrigin === "jarvis-bridge" && candidate.type === "channel.job.queued" && candidate.channelId === event.channelId && candidate.job?.id === event.jobId)
     && events.some((candidate) => {
       const finishedAt = Date.parse(candidate.at || "");
       return trustedOrigin(candidate)
@@ -71,6 +71,7 @@ function contextResolved(events, event) {
   return trustedOrigin(event)
     && event.type === "channel.context.resolved"
     && events.some((candidate) => trustedOrigin(candidate) && candidate.type === "channel.job.queued" && candidate.channelId === event.channelId && candidate.job?.id === event.jobId)
+    && events.some((candidate) => trustedOrigin(candidate) && candidate.type === "channel.worker.input" && candidate.evidenceOrigin === "provider" && candidate.channelId === event.channelId && candidate.jobId === event.jobId && candidate.contextManifestSha256 === event.manifest?.sha256)
     && event.manifest?.sha256
     && Array.isArray(event.manifest.refs)
     && event.manifest.refs.some((ref) => ref.kind !== "fixture" && ref.sha256 && Number.isInteger(ref.bytes));

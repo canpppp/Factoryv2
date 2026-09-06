@@ -7,6 +7,7 @@ const PRIORITIES = new Set(["low", "normal", "high"]);
 function compileTask(channel, input = {}) {
   const tokenBudget = clamp(input.tokenBudget, 256, 32000, 4000);
   const timeoutMs = clamp(input.timeoutMs, 1000, 30 * 60 * 1000, 5 * 60 * 1000);
+  const profile = acceptanceProfile(input.acceptanceProfile, input.doneCondition);
   const envelope = {
     version: 2,
     channel: channel.id,
@@ -22,7 +23,8 @@ function compileTask(channel, input = {}) {
     readWriteBoundary: input.readWriteBoundary || "read-only",
     effectBoundary: input.effectBoundary || input.readWriteBoundary || "read-only",
     doneCondition: bounded(input.doneCondition || "Return a concise evidence-backed result.", 1000, "doneCondition"),
-    acceptanceProfile: acceptanceProfile(input.acceptanceProfile, input.doneCondition),
+    acceptanceProfile: profile,
+    acceptanceRequired: input.acceptanceProfile != null || needsAcceptance(input.doneCondition, input.evidenceRequired),
     tokenBudget,
     timeoutMs,
     budgets: { tokenBudget, timeoutMs },
@@ -76,6 +78,13 @@ function predicateFromDoneCondition(doneCondition) {
   const match = text.match(/\b([A-Za-z][A-Za-z0-9_-]{0,80})\b\s+(?:equals|=|is)\s+([A-Za-z0-9_.-]+)/i);
   if (!match) return null;
   return { type: "fieldEquals", ref: null, field: match[1], equals: match[2] };
+}
+
+function needsAcceptance(doneCondition, evidenceRequired) {
+  return !!String(doneCondition || "").trim()
+    && !/^Return a concise evidence-backed result\.$/.test(String(doneCondition).trim())
+    && Array.isArray(evidenceRequired)
+    && evidenceRequired.some((ref) => /^file:/i.test(String(ref || "")));
 }
 
 function canonicalPayload(envelope) {
