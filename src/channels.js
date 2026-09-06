@@ -150,7 +150,7 @@ function createChannelRegistry({ root, adapterFactory = (config) => createAdapte
       const channel = [...state.channels.values()].find((item) => {
         const job = item.currentJob || item.queue[0];
         const backoff = state.providerBackoffs.get(item.engine);
-        return !legacyAliases.has(item.id) && item.state !== "paused" && job && (deterministic.canRun(job) || !backoff || Date.parse(backoff.until) <= Date.now());
+        return !legacyAliases.has(item.id) && !item.workerBlocked && item.state !== "paused" && job && (deterministic.canRun(job) || !backoff || Date.parse(backoff.until) <= Date.now());
       });
       if (!channel) return { progressed: false, summary: [...state.channels.values()].some((item) => !legacyAliases.has(item.id) && (item.currentJob || item.queue.length)) ? "channels backed off" : "channels idle" };
       const job = channel.currentJob || channel.queue[0];
@@ -260,7 +260,7 @@ function createChannelRegistry({ root, adapterFactory = (config) => createAdapte
         return { progressed: true, channelId: channel.id, result };
       } catch (error) {
         if (!runner.attemptFinished) journal.append(root, { type: "worker.attempt.finished", channelId: channel.id, jobId: job.id, ok: false, code: error.code || "CHANNEL_FAILED", profileDigest: runner.profileDigest || null, receipt: error.details?.receipt || null, origin: "factoryv2", externalEffects: "UNKNOWN" });
-        const interruption = settleInterruption(root, channel.id, job, runner.action);
+        const interruption = error.code === "CLEANUP_FAILED" ? null : settleInterruption(root, channel.id, job, runner.action);
         if (interruption) return interruption;
         if (error.code === "THREAD_NOT_FOUND" || error.code === "SESSION_POLICY_CHANGED") {
           journal.append(root, { type: "channel.session", channelId: channel.id, sessionId: null, engine: channel.engine });
@@ -277,6 +277,7 @@ function createChannelRegistry({ root, adapterFactory = (config) => createAdapte
         const result = { ok: false, jobId: job.id, error: error.message, code: error.code || "CHANNEL_FAILED" };
         persistSession(root, channel.id, job, result);
         journal.append(root, { type: "channel.job.failed", channelId: channel.id, jobId: job.id, result, error: error.message });
+        if (error.code === "CLEANUP_FAILED") journal.append(root, { type: "channel.updated", channelId: channel.id, patch: { workerBlocked: { code: "CLEANUP_FAILED", jobId: job.id, externalEffects: "UNKNOWN" } } });
         return { progressed: true, channelId: channel.id, result };
       } finally {
         active.delete(channel.id);
@@ -332,6 +333,7 @@ function channelPrompt(channel, job, context = null) {
 }
 
 function validateChannel(channel, envelope = {}) {
+  if (channel.workerBlocked) return { ok: false, code: "WORKER_CLEANUP_BLOCKED", reason: "owned worker cleanup is unresolved" };
   const project = validateProject(channel);
   if (!project.ok) return project;
   if (channel.sessionId && channel.sessionEngine && channel.sessionEngine !== channel.engine) return { ok: false, code: "SESSION_IDENTITY_MISMATCH", reason: "session engine does not match channel engine" };

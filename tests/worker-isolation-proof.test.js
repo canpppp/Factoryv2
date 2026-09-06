@@ -117,6 +117,23 @@ async function main() {
   const widerPriming = await submit(limited, limited.request, { readRoots: [limited.business], requiredRefs: ["file:allowed"] });
   assert.equal(widerPriming.run.result.code, "POLICY_DENIED");
   assert.ok(!widerPriming.events.some((event) => event.type === "channel.context.resolved"));
+  for (const action of ["pause", "cancel"]) {
+    // Fault injection verifies propagation of the process wrapper's typed cleanup failure.
+    const failed = setup();
+    let reject;
+    const thread = { run: () => new Promise((resolve, fail) => { reject = fail; }), cancel: () => reject(Object.assign(new Error("owned cleanup failed"), { code: "CLEANUP_FAILED" })) };
+    const registry = createChannelRegistry({ root: failed.root, definitionsPath: failed.definitionsPath, adapterFactory: () => ({ startThread: () => thread }) });
+    registry.send("proof", "cleanup propagation");
+    const pending = registry.runNext();
+    await sleep(20); registry[action]("proof");
+    const result = await pending;
+    assert.equal(result.result.code, "CLEANUP_FAILED");
+    assert.equal(result.paused, undefined); assert.equal(result.cancelled, undefined);
+    assert.equal(registry.result("proof").code, "CLEANUP_FAILED");
+    const restarted = createChannelRegistry({ root: failed.root, definitionsPath: failed.definitionsPath });
+    restarted.ensureDefaults();
+    assert.throws(() => restarted.send("proof", "must not start over unresolved worker"), { code: "WORKER_CLEANUP_BLOCKED" });
+  }
   const unsupported = setup();
   delete unsupported.definition.workerPolicy;
   fs.writeFileSync(unsupported.definitionsPath, JSON.stringify([unsupported.definition]));
