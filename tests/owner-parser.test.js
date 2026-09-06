@@ -20,6 +20,7 @@ async function main() {
   assert.equal(calls, 1);
   const result = requests.result({ requestId: "r" });
   assert.equal(result.status, "finished"); assert.equal(result.outcome.objectiveCompleted, false);
+  assert.equal(load(root).events.find((e) => e.type === "owner.request.admitted").request.status, "admitted", "projection must not rewrite historical event objects");
   requests.admit({ ...params, requestId: "interrupted" });
   journal.append(root, { type: "owner.request.started", requestId: "interrupted", patch: { status: "started", attemptId: "a" } });
   requests.reconcile();

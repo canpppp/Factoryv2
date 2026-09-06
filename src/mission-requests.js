@@ -13,7 +13,7 @@ function load(root) {
   if (!state.ok || state.truncated) fail("JOURNAL_UNCERTAIN");
   const requests = new Map();
   for (const event of state.events) {
-    if (event.type === "owner.request.admitted") requests.set(event.request.id, event.request);
+    if (event.type === "owner.request.admitted") requests.set(event.request.id, structuredClone(event.request));
     if (["owner.request.started", "owner.request.finished", "owner.request.blocked"].includes(event.type)) {
       const request = requests.get(event.requestId);
       if (!request) fail("JOURNAL_UNCERTAIN");
