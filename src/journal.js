@@ -111,6 +111,7 @@ function materialize(events) {
       if (channel) {
         channel.sessionId = e.sessionId;
         channel.sessionEngine = e.sessionId ? (e.engine || channel.engine) : null;
+        channel.sessionProfileDigest = e.sessionId ? (e.profileDigest || null) : null;
       }
     }
     if (["channel.job.finished", "channel.job.failed", "channel.job.cancelled", "channel.job.unverified"].includes(e.type)) {

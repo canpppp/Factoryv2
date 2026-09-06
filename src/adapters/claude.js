@@ -1,66 +1,9 @@
 "use strict";
 
-const { randomUUID } = require("node:crypto");
-const { runJsonlProcess, classifiedError } = require("./process");
+const { createOwnedAdapter } = require("./owned-thread");
 
 function createClaudeAdapter(config = {}) {
-  const command = config.command || process.env.FACTORYV2_CLAUDE_BIN || "claude";
-  const active = new Map();
-
-  function thread(sessionId, options) {
-    return {
-      id: sessionId,
-      async run(prompt, hooks = {}) {
-        const id = sessionId || randomUUID();
-        hooks.onThreadId?.(id);
-        const args = buildArgs({ ...config, ...options, sessionId: sessionId ? id : null, newSessionId: sessionId ? null : id });
-        let handle;
-        handle = runJsonlProcess({
-          command,
-          args,
-          cwd: options.cwd,
-          input: prompt,
-          timeoutMs: options.timeoutMs || config.timeoutMs || 300000,
-          onSpawn: () => active.set(id, handle),
-          onEvent: (event) => {
-            if (event.session_id && event.session_id !== id) hooks.onThreadId?.(event.session_id);
-            hooks.onEvent?.(event);
-          }
-        });
-        active.set(id, handle);
-        const result = await handle.promise;
-        active.delete(id);
-        const receipt = claudeReceipt(result, id, options);
-        if (!receipt.ok) throw classifiedError(receipt.error, { ...result, receipt });
-        return receipt;
-      },
-      cancel() { return cancelThread(sessionId); }
-    };
-  }
-
-  function cancelThread(sessionId) {
-    return !!(sessionId && active.get(sessionId)?.cancel());
-  }
-
-  return {
-    engine: "claude",
-    startThread(options = {}) { return thread(null, normalizeOptions(options, config)); },
-    resumeThread(sessionId, options = {}) {
-      if (!sessionId) throw classifiedError("session id is required", { stderr: "session not found" });
-      return thread(sessionId, normalizeOptions(options, config));
-    },
-    cancelThread
-  };
-}
-
-function normalizeOptions(options, config) {
-  return {
-    ...options,
-    model: options.model || config.model,
-    maxTurns: options.maxTurns || config.maxTurns || 12,
-    allowedTools: options.allowedTools || config.allowedTools,
-    disallowedTools: options.disallowedTools || config.disallowedTools
-  };
+  return createOwnedAdapter("claude", config, buildArgs, claudeReceipt);
 }
 
 function buildArgs(options) {
@@ -69,7 +12,7 @@ function buildArgs(options) {
   if (options.newSessionId) args.push("--session-id", options.newSessionId);
   args.push("--max-turns", String(options.maxTurns || 12));
   if (options.model) args.push("--model", options.model);
-  args.push("--permission-mode", options.readOnly ? "dontAsk" : (options.permissionMode || "auto"));
+  args.push("--permission-mode", "dontAsk", "--tools", (options.allowedTools || []).join(","), "--safe-mode", "--restricted", "--disable-slash-commands", "--no-chrome", "--setting-sources", "", "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}', "--settings", '{"disableAllHooks":true}');
   if (options.allowedTools?.length) args.push("--allowedTools", options.allowedTools.join(","));
   const denied = [...new Set([...(options.disallowedTools || []), ...(options.readOnly ? ["Edit", "Write", "NotebookEdit"] : [])])];
   if (denied.length) args.push("--disallowedTools", denied.join(","));
@@ -82,7 +25,7 @@ function claudeReceipt(processResult, fallbackSessionId, options = {}) {
   const modelEvent = processResult.events.find((event) => event.model || event.model_name);
   const sessionId = result?.session_id || sessionEvent?.session_id || fallbackSessionId;
   const usage = result?.usage || {};
-  const ok = processResult.code === 0 && !processResult.timedOut && !processResult.cancelled && result && !result.is_error;
+  const ok = processResult.code === 0 && (!processResult.cause || processResult.cause === "EXIT") && !processResult.timedOut && !processResult.cancelled && result && !result.is_error;
   return {
     ok: !!ok,
     engine: "claude",

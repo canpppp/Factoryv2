@@ -1,68 +1,121 @@
 "use strict";
 
 const { spawn } = require("node:child_process");
-const readline = require("node:readline");
+const { randomUUID } = require("node:crypto");
 
-function runJsonlProcess({ command, args, cwd, input, timeoutMs = 300000, env = {}, onEvent, onSpawn }) {
-  let child = null;
-  let timedOut = false;
-  let cancelled = false;
-  let timer = null;
+const DEFAULT_LIMITS = Object.freeze({ lineBytes: 1024 * 1024, stdoutBytes: 8 * 1024 * 1024, events: 4096, invalidLines: 32, stderrBytes: 65536, killGraceMs: 500, cleanupMs: 3000 });
+function validateLimits(value = {}) {
+  const limits = { ...DEFAULT_LIMITS, ...value };
+  for (const [key, number] of Object.entries(limits)) {
+    if (!Object.hasOwn(DEFAULT_LIMITS, key) || !Number.isSafeInteger(number) || number <= 0 || number > DEFAULT_LIMITS[key]) throw Object.assign(new Error(`invalid worker limit: ${key}`), { code: "POLICY_DENIED" });
+  }
+  return Object.freeze(limits);
+}
 
-  const promise = new Promise((resolve, reject) => {
-    const events = [];
-    const invalidLines = [];
-    let stderr = "";
-    child = spawn(command, args, {
-      cwd,
-      env: { ...process.env, ...env },
-      stdio: ["pipe", "pipe", "pipe"]
-    });
-    if (onSpawn) onSpawn(child);
-
-    const lines = readline.createInterface({ input: child.stdout });
-    lines.on("line", (line) => {
-      if (!line.trim()) return;
-      try {
-        const event = JSON.parse(line);
-        events.push(event);
-        if (onEvent) onEvent(event);
-      } catch {
-        invalidLines.push(line.slice(0, 2000));
+function runJsonlProcess({ command, args = [], cwd, input, timeoutMs = 300000, env = {}, limits: configured, onEvent, onSpawn }) {
+  const limits = validateLimits(configured);
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0 || timeoutMs > 1800000) throw Object.assign(new Error("invalid worker timeout"), { code: "POLICY_DENIED" });
+  const runId = randomUUID();
+  let child, cause = null, settled = false, closed = false, exitCode = null, exitSignal = null;
+  let timer, killTimer, deadlineTimer, groupTimer;
+  let pending = Buffer.alloc(0), stderr = Buffer.alloc(0);
+  const events = [], invalidLines = [];
+  const counts = { stdoutBytes: 0, stderrBytes: 0, events: 0, invalidLines: 0, pendingBytes: 0 };
+  let resolve;
+  const promise = new Promise((done) => { resolve = done; });
+  function groupAlive() {
+    if (!child?.pid) return false;
+    try { process.kill(-child.pid, 0); return true; } catch (error) { return error.code !== "ESRCH"; }
+  }
+  function signalOwned(signal) {
+    if (!child?.pid) return;
+    try { process.kill(-child.pid, signal); } catch (error) { if (error.code !== "ESRCH") cause = "CLEANUP_FAILED"; }
+  }
+  function finish() {
+    if (settled) return;
+    settled = true;
+    for (const t of [timer, killTimer, deadlineTimer]) clearTimeout(t);
+    clearInterval(groupTimer);
+    child?.stdout?.removeAllListeners("data"); child?.stderr?.removeAllListeners("data");
+    child?.stdout?.destroy(); child?.stderr?.destroy(); child?.stdin?.destroy();
+    child?.unref();
+    pending = Buffer.alloc(0);
+    resolve({ runId, pid: child?.pid || null, code: exitCode, signal: exitSignal, cause: cause || "EXIT", events, invalidLines, stderr: stderr.toString("utf8"), counts: { ...counts }, timedOut: cause === "TIMEOUT", cancelled: cause === "CANCELLED" });
+  }
+  function checkCleanup() { if (closed && !groupAlive()) finish(); }
+  function terminate(reason) {
+    if (settled || cause) return false;
+    cause = reason;
+    clearTimeout(timer);
+    signalOwned("SIGTERM");
+    killTimer = setTimeout(() => { signalOwned("SIGKILL"); checkCleanup(); }, limits.killGraceMs);
+    groupTimer = setInterval(checkCleanup, 20);
+    deadlineTimer = setTimeout(() => { signalOwned("SIGKILL"); if (!closed || groupAlive()) cause = "CLEANUP_FAILED"; finish(); }, limits.killGraceMs + limits.cleanupMs);
+    return true;
+  }
+  function line(buffer) {
+    if (cause || settled || !buffer.toString("utf8").trim()) return;
+    let event;
+    try { event = JSON.parse(buffer.toString("utf8")); }
+    catch {
+      if (invalidLines.length >= limits.invalidLines) return terminate("OUTPUT_LIMIT");
+      invalidLines.push(buffer.toString("utf8")); counts.invalidLines++;
+      return;
+    }
+    if (events.length >= limits.events) return terminate("OUTPUT_LIMIT");
+    events.push(event); counts.events++;
+    try { onEvent?.(event); } catch { terminate("EVENT_HANDLER_FAILED"); }
+  }
+  try {
+    if (process.platform === "win32") throw new Error("owned process groups unavailable");
+    child = spawn(command, args, { cwd, env: { ...env }, detached: true, stdio: ["pipe", "pipe", "pipe"] });
+    child.on("error", () => { closed = true; terminate("SPAWN_ERROR"); checkCleanup(); });
+    child.stdin.on("error", () => {});
+    child.stdout.on("data", (chunk) => {
+      if (cause || settled) return;
+      if (counts.stdoutBytes + chunk.length > limits.stdoutBytes) return terminate("OUTPUT_LIMIT");
+      counts.stdoutBytes += chunk.length;
+      let offset = 0;
+      while (offset < chunk.length && !cause && !settled) {
+        const newline = chunk.indexOf(10, offset);
+        const end = newline < 0 ? chunk.length : newline;
+        if (pending.length + end - offset > limits.lineBytes) return terminate("OUTPUT_LIMIT");
+        pending = Buffer.concat([pending, chunk.subarray(offset, end)]);
+        counts.pendingBytes = Math.max(counts.pendingBytes, pending.length);
+        if (newline < 0) break;
+        line(pending); pending = Buffer.alloc(0); offset = end + 1;
       }
     });
-    child.stderr.on("data", (chunk) => { stderr = `${stderr}${chunk}`.slice(-12000); });
-    child.on("error", reject);
-    child.on("close", (code, signal) => {
-      clearTimeout(timer);
-      resolve({ code, signal, events, invalidLines, stderr, timedOut, cancelled });
+    child.stderr.on("data", (chunk) => {
+      if (cause || settled) return;
+      if (counts.stderrBytes + chunk.length > limits.stderrBytes) return terminate("OUTPUT_LIMIT");
+      counts.stderrBytes += chunk.length; stderr = Buffer.concat([stderr, chunk]);
     });
-
+    child.on("exit", (code, signal) => {
+      exitCode = code; exitSignal = signal;
+      // A leader can exit while descendants still hold its pipes open.
+      if (groupAlive()) terminate("DESCENDANTS_REMAINED");
+    });
+    child.on("close", (code, signal) => {
+      closed = true; exitCode = code; exitSignal = signal;
+      if (!cause) { if (pending.length) line(pending); if (!cause) finish(); }
+      else checkCleanup();
+    });
+    timer = setTimeout(() => terminate("TIMEOUT"), timeoutMs);
+    onSpawn?.(child);
     child.stdin.end(String(input || ""));
-    timer = setTimeout(() => {
-      timedOut = true;
-      child.kill("SIGTERM");
-      const killTimer = setTimeout(() => child && child.kill("SIGKILL"), 2000);
-      killTimer.unref();
-    }, timeoutMs);
-    timer.unref();
-  });
-
-  return {
-    promise,
-    cancel() {
-      if (!child || child.exitCode !== null) return false;
-      cancelled = true;
-      child.kill("SIGTERM");
-      return true;
-    }
-  };
+  } catch {
+    if (child?.pid) terminate("SPAWN_ERROR");
+    else { cause = "SPAWN_ERROR"; closed = true; finish(); }
+  }
+  return { runId, promise, cancel: () => terminate("CANCELLED") };
 }
 
 function classifiedError(message, details = {}) {
   const text = `${message || ""}\n${details.stderr || ""}`;
   const error = new Error(message || "agent process failed");
-  if (details.timedOut) error.code = "TIMEOUT";
+  if (details.cause && details.cause !== "EXIT") error.code = details.cause;
+  else if (details.timedOut) error.code = "TIMEOUT";
   else if (details.cancelled) error.code = "CANCELLED";
   else if (/rate.?limit|quota|capacity|overloaded|too many requests|529|429/i.test(text)) error.code = "PROVIDER_QUOTA";
   else if (/session|thread/.test(text.toLowerCase()) && /not found|unknown|invalid/.test(text.toLowerCase())) error.code = "THREAD_NOT_FOUND";
@@ -72,4 +125,4 @@ function classifiedError(message, details = {}) {
   return error;
 }
 
-module.exports = { runJsonlProcess, classifiedError };
+module.exports = { runJsonlProcess, classifiedError, validateLimits, DEFAULT_LIMITS };

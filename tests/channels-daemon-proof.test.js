@@ -12,9 +12,10 @@ const journal = require("../src/journal");
 const H = require("./helpers");
 
 const fixture = path.join(__dirname, "fixtures/agent-cli.js");
+const fixtureConfigForWorker = require("./fixtures/isolated-profile").fixtureProfile(fixture);
 const adapterFactory = ({ engine, ...config }) => engine === "codex"
-  ? createCodexAdapter({ ...config, command: fixture })
-  : createClaudeAdapter({ ...config, command: fixture });
+  ? createCodexAdapter({ ...config, ...fixtureConfigForWorker })
+  : createClaudeAdapter({ ...config, ...fixtureConfigForWorker });
 
 async function main() {
   const root = H.tmp("factoryv2-channels-");

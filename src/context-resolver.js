@@ -8,6 +8,7 @@ const MAX_REQUIRED_BYTES = 64 * 1024;
 const MAX_OPTIONAL_BYTES = 16 * 1024;
 
 function resolveContext(channel, envelope = {}) {
+  channel = { ...channel, contextReadRoots: envelope.readRoots || channel.workerPolicy?.readRoots };
   const required = [...(envelope.primingRefs || []), ...(envelope.contextRefs || []), ...(envelope.requiredRefs || [])]
     .filter((ref, index, all) => ref && all.indexOf(ref) === index);
   const resolved = [];
@@ -72,6 +73,7 @@ function resolveFile(channel, relative, envelope = {}) {
     if (stat.isSymbolicLink()) return fail("CONTEXT_PATH_ESCAPE", "symlink context refs are refused");
     targetReal = fs.realpathSync(target);
     if (!inside(root, targetReal)) return fail("CONTEXT_PATH_ESCAPE", "context ref escapes channel root");
+    if (channel.contextReadRoots && !channel.contextReadRoots.some((allowed) => targetReal === real(allowed) || inside(real(allowed), targetReal))) return fail("CONTEXT_POLICY_DENIED", "context ref exceeds effective worker read roots");
     if (!stat.isFile()) return fail("CONTEXT_NOT_FILE", "context ref is not a file");
     const bytes = stat.size;
     const max = envelope.requiredRefs?.includes(`file:${relative}`) ? MAX_REQUIRED_BYTES : MAX_OPTIONAL_BYTES;

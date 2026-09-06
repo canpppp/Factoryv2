@@ -16,7 +16,7 @@ const { resolveContext, digest } = require("./context-resolver");
 const { verifyWorkerResult } = require("./result-verifier");
 
 const RECOVERABLE = new Set(["PROVIDER_QUOTA", "TIMEOUT", "AUTH_REQUIRED", "AGENT_FAILED"]);
-const DEFINITION_FIELDS = ["name", "aliases", "cwd", "engine", "modelPolicy", "allowedTools", "readWriteProfile", "writeAuthority", "projectIdentity", "capsule", "capsulePath", "definitionVersion", "identityKey", "unavailableReason"];
+const DEFINITION_FIELDS = ["name", "aliases", "cwd", "engine", "modelPolicy", "allowedTools", "workerPolicy", "readWriteProfile", "writeAuthority", "projectIdentity", "capsule", "capsulePath", "definitionVersion", "identityKey", "unavailableReason"];
 
 function createChannelRegistry({ root, adapterFactory = (config) => createAdapter(config), definitionsPath } = {}) {
   if (!root) throw new Error("channel registry needs root");
@@ -112,7 +112,8 @@ function createChannelRegistry({ root, adapterFactory = (config) => createAdapte
     const runner = active.get(channelId);
     if (runner) {
       runner.action = "pause";
-      if (runner.sessionId) runner.adapter.cancelThread(runner.sessionId);
+      if (runner.thread?.cancel) runner.thread.cancel();
+      else if (runner.sessionId) runner.adapter.cancelThread(runner.sessionId);
     }
     journal.append(root, { type: "channel.paused", channelId });
     return status(channelId);
@@ -133,7 +134,8 @@ function createChannelRegistry({ root, adapterFactory = (config) => createAdapte
     const runner = active.get(channelId);
     if (runner) {
       runner.action = "cancel";
-      if (runner.sessionId) runner.adapter.cancelThread(runner.sessionId);
+      if (runner.thread?.cancel) runner.thread.cancel();
+      else if (runner.sessionId) runner.adapter.cancelThread(runner.sessionId);
     }
     if (channel.currentJob) journal.append(root, { type: "channel.job.cancelled", channelId, jobId: channel.currentJob.id, error: "cancelled" });
     else journal.append(root, { type: "channel.updated", channelId, patch: { queue: [] } });
@@ -176,27 +178,36 @@ function createChannelRegistry({ root, adapterFactory = (config) => createAdapte
         return { progressed: true, channelId: channel.id, result };
       }
       const policy = modelRouter.route({ kind: job.kind, engine: channel.engine, failedRepairs: job.failedRepairs || 0, preferred: job.modelFallback });
-      const adapter = adapterFactory({ engine: channel.engine, model: policy.model });
+      const adapter = adapterFactory({ engine: channel.engine, model: policy.model, workerPolicy: channel.workerPolicy });
       const options = {
+        channelId: channel.id,
         cwd: channel.cwd,
-        readOnly: channel.readWriteProfile === "read-only",
-        allowedTools: channel.allowedTools,
+        readOnly: channel.readWriteProfile === "read-only" || job.envelope?.readWriteBoundary === "read-only",
+        allowedTools: job.envelope?.requestedTools || [],
+        readRoots: job.envelope?.readRoots,
+        writeRoots: job.envelope?.writeRoots,
+        limits: job.envelope?.outputLimits,
+        resumeProfileDigest: channel.sessionProfileDigest,
         model: policy.model,
         maxTurns: 8,
         timeoutMs: job.envelope?.timeoutMs || 5 * 60 * 1000
       };
       const sessionId = channel.sessionId || null;
-      const agentThread = sessionId ? adapter.resumeThread(sessionId, options) : adapter.startThread(options);
       const prompt = channelPrompt(channel, job, context);
       const runner = { adapter, sessionId, action: null };
       active.set(channel.id, runner);
       try {
+        const agentThread = sessionId ? adapter.resumeThread(sessionId, options) : adapter.startThread(options);
+        runner.thread = agentThread;
+        runner.profileDigest = agentThread.profile?.digest || null;
+        journal.append(root, { type: "worker.attempt.started", channelId: channel.id, jobId: job.id, engine: channel.engine, profileDigest: runner.profileDigest, executableSha256: agentThread.profile?.executableSha256 || null, sourceRevision: factorySourceRevision(), sourceDigest: factorySourceDigest(), origin: "factoryv2", evidenceOrigin: agentThread.profile?.synthetic ? "synthetic" : "adapter" });
         const receipt = await agentThread.run(prompt, {
           onThreadId(id) {
             runner.sessionId = id;
-            if (id && id !== channel.sessionId) journal.append(root, { type: "channel.session", channelId: channel.id, sessionId: id, engine: channel.engine });
+            if (id && id !== channel.sessionId) journal.append(root, { type: "channel.session", channelId: channel.id, sessionId: id, engine: channel.engine, profileDigest: runner.profileDigest });
           }
         });
+        journal.append(root, { type: "worker.attempt.finished", channelId: channel.id, jobId: job.id, ok: !!receipt.ok, receipt: compactReceipt(receipt), origin: "factoryv2" });
         const interruption = settleInterruption(root, channel.id, job, runner.action);
         if (interruption) return interruption;
         if (!receipt || typeof receipt.finalResponse !== "string" || !receipt.finalResponse.trim()) {
@@ -211,7 +222,8 @@ function createChannelRegistry({ root, adapterFactory = (config) => createAdapte
           sessionId: receipt.sessionId || receipt.threadId || runner.sessionId || null,
           engine: receipt.engine || channel.engine,
           origin: receipt.origin || "adapter",
-          finalResponseDigest: digest(receipt.finalResponse)
+          finalResponseDigest: digest(receipt.finalResponse),
+          metadata: receipt.metadata || {}
         });
         journal.append(root, {
           type: "channel.worker.input",
@@ -222,7 +234,7 @@ function createChannelRegistry({ root, adapterFactory = (config) => createAdapte
           contextManifestSha256: context.manifest.sha256,
           resolvedRefs: context.manifest.refs.map((ref) => ref.ref),
           origin: "factoryv2",
-          evidenceOrigin: "provider"
+          evidenceOrigin: receipt.origin === "synthetic" ? "synthetic" : "provider"
         });
         tokenGovernor.record(root, {
           scope: `channel:${channel.id}:${job.id}`,
@@ -243,12 +255,13 @@ function createChannelRegistry({ root, adapterFactory = (config) => createAdapte
         }
         const result = { ok: true, jobId: job.id, verified: true, summary: verification.summary, evidence: verification.evidence, structured: verification.structured, receipt: compactReceipt(receipt), finishedAt: new Date().toISOString() };
         persistSession(root, channel.id, job, result, context.manifest);
-        journal.append(root, { type: "channel.job.finished", channelId: channel.id, jobId: job.id, result, origin: "factoryv2", evidenceOrigin: "provider" });
+        journal.append(root, { type: "channel.job.finished", channelId: channel.id, jobId: job.id, result, origin: "factoryv2", evidenceOrigin: receipt.origin === "synthetic" ? "synthetic" : "provider" });
         return { progressed: true, channelId: channel.id, result };
       } catch (error) {
+        journal.append(root, { type: "worker.attempt.finished", channelId: channel.id, jobId: job.id, ok: false, code: error.code || "CHANNEL_FAILED", profileDigest: runner.profileDigest || null, receipt: error.details?.receipt || null, origin: "factoryv2", externalEffects: "UNKNOWN" });
         const interruption = settleInterruption(root, channel.id, job, runner.action);
         if (interruption) return interruption;
-        if (error.code === "THREAD_NOT_FOUND") {
+        if (error.code === "THREAD_NOT_FOUND" || error.code === "SESSION_POLICY_CHANGED") {
           journal.append(root, { type: "channel.session", channelId: channel.id, sessionId: null, engine: channel.engine });
           journal.append(root, { type: "channel.job.deferred", channelId: channel.id, jobId: job.id, reason: error.code, message: error.message });
           return { progressed: false, retry: true, channelId: channel.id, summary: "stale session reset" };
@@ -285,6 +298,7 @@ function normalizeDefinition(definition, configDir = path.join(__dirname, "../co
     sessionId: null,
     modelPolicy: definition.modelPolicy || { kind: "implementation" },
     allowedTools: definition.allowedTools || ["Read", "Glob", "Grep"],
+    workerPolicy: definition.workerPolicy || null,
     readWriteProfile: definition.readWriteProfile || "read-only",
     writeAuthority: definition.writeAuthority || "none",
     capsule,
@@ -385,6 +399,16 @@ function channelError(message, code) {
   const error = new Error(message);
   error.code = code || "CHANNEL_REFUSED";
   return error;
+}
+
+function factorySourceRevision() {
+  const result = spawnSync("git", ["rev-parse", "HEAD"], { cwd: path.join(__dirname, ".."), encoding: "utf8" });
+  return result.status === 0 ? result.stdout.trim() : "UNAVAILABLE";
+}
+
+function factorySourceDigest() {
+  const files = ["channels.js", "journal.js", "task-compiler.js", "context-resolver.js", "adapters/index.js", "adapters/claude.js", "adapters/codex.js", "adapters/owned-thread.js", "adapters/worker-policy.js", "adapters/process.js"];
+  return digest(files.map((file) => [file, digest(fs.readFileSync(path.join(__dirname, file), "utf8"))]));
 }
 
 function settleInterruption(root, channelId, job, action) {
