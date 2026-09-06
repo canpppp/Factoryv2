@@ -15,7 +15,9 @@ process.on("SIGTERM", () => daemon.stop());
 process.on("SIGINT", () => daemon.stop());
 
 async function main() {
-  if (!argv.includes("--once")) return daemon.start();
+  if (!argv.includes("--local-test")) return daemon.start({ once: argv.includes("--once") });
+  if (!argv.includes("--once")) throw new Error("local test mode requires --once");
+  require("../src/owner-client").assertLocalTest(root);
   const journal = require("../src/journal");
   journal.append(root, { type: "daemon.started", pid: process.pid, engine: value("engine", process.env.FACTORYV2_ENGINE || "claude"), once: true });
   try { return await daemon.runOnce(); }

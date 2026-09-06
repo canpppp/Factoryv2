@@ -7,6 +7,7 @@ const { createController } = require("./controller");
 const { createAdapter } = require("./adapters");
 const { createChannelRegistry } = require("./channels");
 const { createChannelApi } = require("./channel-api");
+const { createMissionRequests } = require("./mission-requests");
 
 const NOTIFICATION_TYPES = new Set(["READY_FOR_HUMAN_CHECK", "HUMAN_DECISION_REQUIRED", "BLOCKED_EXTERNAL", "SHIPPED"]);
 
@@ -14,10 +15,16 @@ function createDaemon({ root, engine = process.env.FACTORYV2_ENGINE || "claude",
   if (!root) throw new Error("factoryd needs root");
   const makeAdapter = adapterFactory || ((config) => createAdapter(config));
   const channels = createChannelRegistry({ root, adapterFactory: makeAdapter, definitionsPath: channelDefinitionsPath });
-  const channelApi = createChannelApi({ root, registry: channels });
+  let executionOwner;
+  const requests = createMissionRequests({ root,
+    controller: () => createController({ root, adapterFactory: makeAdapter, rolePolicies, rolePoliciesPath }),
+    owner: () => executionOwner });
+  const channelApi = createChannelApi({ root, registry: channels,
+    extraTools: { "mission.run": requests.admit, "mission.result": requests.result },
+    beforeReady: (owner) => { executionOwner = owner; requests.reconcile(); } });
   let stopping = false;
 
-  async function runOnce() {
+  async function runOnce({ attached = false } = {}) {
     channels.ensureDefaults();
     clearExpiredBackoffs(root);
     const state = journal.load(root);
@@ -25,8 +32,9 @@ function createDaemon({ root, engine = process.env.FACTORYV2_ENGINE || "claude",
     let controllerResult = { ok: true, summary: "provider backoff" };
     const controllerWork = [...state.goals.values()].some((goal) => goal.state === "queued")
       || [...state.missions.values()].some((mission) => ["queued", "building", "repair", "verifying", "reviewing", "integrating", "candidate", "accepting"].includes(mission.state));
-    if (controllerWork && (!providerBackoff || Date.parse(providerBackoff.until) <= Date.now())) {
-      controllerResult = await createController({ root, adapterFactory: makeAdapter, rolePolicies, rolePoliciesPath }).run({ maxSteps: 10 });
+    if ((attached || controllerWork) && (!providerBackoff || Date.parse(providerBackoff.until) <= Date.now())) {
+      controllerResult = attached ? await requests.runNext()
+        : await createController({ root, adapterFactory: makeAdapter, rolePolicies, rolePoliciesPath }).run({ maxSteps: 10 });
       if (controllerResult.backoff) scheduleDaemonBackoff(root, engine, controllerResult.summary);
     }
     const channelWork = [...state.channels.values()].some((channel) => channel.currentJob || channel.queue.length);
@@ -36,16 +44,18 @@ function createDaemon({ root, engine = process.env.FACTORYV2_ENGINE || "claude",
     return { controller: controllerResult, channel: channelResult };
   }
 
-  async function start() {
-    journal.append(root, { type: "daemon.started", pid: process.pid, engine });
+  async function start({ once = false } = {}) {
     await channelApi.start();
+    journal.append(root, { type: "daemon.started", pid: process.pid, engine, generation: channelApi.owner.generation });
     try {
       while (!stopping) {
         try {
-          await runOnce();
+          channelApi.assertOwned();
+          await runOnce({ attached: true });
         } catch (error) {
           journal.append(root, { type: "daemon.error", message: error.message, code: error.code || null });
         }
+        if (once) break;
         if (!stopping) await sleep(pollMs);
       }
     } finally {

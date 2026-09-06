@@ -323,16 +323,16 @@ function createController({ root, adapter, adapterFactory = createAdapter, roleP
     setMissionState(mission, "repair");
   }
 
-  async function step() {
+  async function step({ missionId } = {}) {
     let state = journal.load(root);
     if (!state.ok) return { progressed: false, summary: `blocked: ${state.reason}` };
-    const queuedGoal = [...state.goals.values()].find((g) => g.state === "queued");
+    const queuedGoal = !missionId && [...state.goals.values()].find((g) => g.state === "queued");
     if (queuedGoal) {
       architect(queuedGoal);
       return { progressed: true, summary: "architected goal" };
     }
     state = journal.load(root);
-    const mission = [...state.missions.values()].find((m) => isRunnable(m, state.missions));
+    const mission = [...state.missions.values()].find((m) => (!missionId || m.id === missionId) && isRunnable(m, state.missions));
     if (!mission) return { progressed: false, summary: "idle" };
     try {
       checkSettled(mission);
@@ -370,13 +370,13 @@ function createController({ root, adapter, adapterFactory = createAdapter, roleP
     }
   }
 
-  async function run({ maxSteps = 100 } = {}) {
+  async function run({ maxSteps = 100, missionId } = {}) {
     const paused = path.join(journal.paths(root).root, "PAUSED");
     if (require("node:fs").existsSync(paused)) return { ok: true, summary: "paused" };
     return lease.withLease(root, async () => {
       let summary = "idle";
       for (let i = 0; i < maxSteps; i++) {
-        const r = await step();
+        const r = await step({ missionId });
         summary = r.summary;
         if (r.code) return { ok: false, code: r.code, summary };
         if (r.interrupted || r.backoff || !r.progressed) return { ok: true, summary, backoff: !!r.backoff };

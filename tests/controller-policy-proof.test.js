@@ -121,7 +121,7 @@ async function main() {
 
   const cli = path.resolve(__dirname, "../bin/factoryv2.js");
   const absent = fixture(); await prepare(absent);
-  const missingCli = spawnSync(process.execPath, [cli, "run", "--root", absent.root, "--max-steps", "1"], { encoding: "utf8" });
+  const missingCli = spawnSync(process.execPath, [cli, "run", "--local-test", "--root", absent.root, "--max-steps", "1"], { encoding: "utf8" });
   assert.equal(missingCli.status, 1); assert.match(missingCli.stdout, /ISOLATION_UNSUPPORTED/); assert.match(current(absent).blocker, /ISOLATION_UNSUPPORTED/); assert.equal(traces(absent).length, 0);
   const daemonAbsent = fixture(); await prepare(daemonAbsent);
   let daemonCalls = 0;
@@ -198,7 +198,7 @@ async function main() {
   const configuredCli = fixture(); await prepare(configuredCli);
   const configPath = path.join(configuredCli.root, "operator-role-policies.json");
   fs.writeFileSync(configPath, JSON.stringify(configuredCli.rolePolicies));
-  const launched = spawnSync(process.execPath, [cli, "run", "--root", configuredCli.root, "--role-policies", configPath, "--max-steps", "3"], { encoding: "utf8", timeout: 20000 });
+  const launched = spawnSync(process.execPath, [cli, "run", "--local-test", "--root", configuredCli.root, "--role-policies", configPath, "--max-steps", "3"], { encoding: "utf8", timeout: 20000 });
   assert.equal(launched.status, 0, launched.stderr);
   assert.deepEqual(traces(configuredCli).map((item) => item.role).sort(), ["reviewer", "worker"]);
   assert.equal(current(configuredCli).state, "repair");
@@ -210,7 +210,7 @@ async function main() {
   assert.equal(current(daemonFixture).state, "blocked"); // reviewer budget, never integrate
   const daemonCli = fixture(); await prepare(daemonCli);
   const daemonCliPath = path.join(daemonCli.root, "operator-role-policies.json"); fs.writeFileSync(daemonCliPath, JSON.stringify(daemonCli.rolePolicies));
-  const once = spawnSync(process.execPath, [path.resolve(__dirname, "../bin/factoryd.js"), "--once", "--root", daemonCli.root, "--role-policies", daemonCliPath], { encoding: "utf8", timeout: 30000, env: { PATH: process.env.PATH, HOME: daemonCli.root } });
+  const once = spawnSync(process.execPath, [path.resolve(__dirname, "../bin/factoryd.js"), "--once", "--local-test", "--root", daemonCli.root, "--role-policies", daemonCliPath], { encoding: "utf8", timeout: 30000, env: { PATH: process.env.PATH, HOME: daemonCli.root } });
   assert.equal(once.status, 0, once.stderr); assert.ok(traces(daemonCli).some((item) => item.role === "reviewer"));
   for (const target of [f, configuredCli, daemonFixture, daemonCli]) assert.ok(!journal.load(target.root).events.some((event) => ["integration.finished", "candidate.verified", "release.evaluated"].includes(event.type)));
   console.log("M0.2-C Linux CLI and daemon operator configuration -> actual worker/reviewer consumers PASS; no integration/candidate/release");

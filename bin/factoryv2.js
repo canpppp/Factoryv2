@@ -11,7 +11,7 @@ const { createChannelRegistry } = require("../src/channels");
 const { install: installLaunchd } = require("../src/launchd");
 
 const argv = process.argv.slice(2);
-const FLAGS_WITH_VALUES = new Set(["--root", "--repo", "--max-steps", "--engine", "--role-policies"]);
+const FLAGS_WITH_VALUES = new Set(["--root", "--repo", "--max-steps", "--engine", "--role-policies", "--mission", "--request-id"]);
 function positionals() {
   const out = [];
   for (let i = 0; i < argv.length; i++) {
@@ -51,7 +51,23 @@ async function main() {
     console.log(`queued ${goal.id}`);
     return;
   }
+  if (cmd === "run" && !argv.includes("--local-test") || cmd === "result") {
+    const client = require("../src/owner-client");
+    if (flag("role-policies") || flag("engine")) die("REQUEST_INVALID: owner policies are not client inputs");
+    const requestId = flag("request-id");
+    let result = await client.call(root, cmd === "run" ? "mission.run" : "mission.result",
+      cmd === "run" ? { requestId, missionId: flag("mission"), maxSteps: Number(flag("max-steps", 1)) } : { requestId });
+    const deadline = Date.now() + 60000;
+    while (argv.includes("--wait") && ["admitted", "started"].includes(result.status) && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      result = await client.call(root, "mission.result", { requestId });
+    }
+    console.log(JSON.stringify(result));
+    if (result.status === "blocked" || result.outcome?.execution?.ok === false) process.exitCode = 1;
+    return;
+  }
   if (cmd === "run") {
+    require("../src/owner-client").assertLocalTest(root);
     const controller = createController({ root, rolePoliciesPath: flag("role-policies") });
     const result = await controller.run({ maxSteps: Number(flag("max-steps", 100)) });
     console.log(result.code ? `${result.code}: ${result.summary}` : result.summary);
