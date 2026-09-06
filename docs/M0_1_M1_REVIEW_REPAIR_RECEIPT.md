@@ -12,6 +12,8 @@ Second-round Factory repair commit: `7e2b01e19fd18a8b64a1e4c59fd9e99779d8cd4b`
 
 Second-round JARVIS bridge repair commit: `672be1daaee156a14752a9322f4a413d0150328b`
 
+Final R1/R3 Factory repair commit: `25e5f1757e402848203bd67d4c88fed98788c14e`
+
 ## Architect Findings Closed
 
 - R1: audit promotion now rejects fixture-origin evidence for live proof, requires trusted linked queue/finish/retrieval/context/token/quota observations, and the quota continuation branch no longer references an undefined variable.
@@ -22,6 +24,8 @@ Second-round JARVIS bridge repair commit: `672be1daaee156a14752a9322f4a413d01503
 - Second-round R2: the actual Kaylas pack vocabulary resolves from scoped source bindings for `project:*`, `store:*`, `active-priorities:*`, `project-memory:*`, `daily-log:*`, and `skill:*`, and remains typed-blocked when a source binding is absent.
 - Second-round R3: bounded `fieldEquals` acceptance predicates are independently checked against resolved file evidence; affirmative worker prose and manifest echo are insufficient.
 - Second-round R4: missing or empty returned result job identity is `UNKNOWN`, never `SUCCESS`; JARVIS preserves per-channel job identity for exact old-channel follow-ups.
+- Final R1: controller producer provenance is separated from proof origin. Direct deterministic registry jobs no longer live-prove JARVIS bridge dispatch/retrieval or worker-context consumption.
+- Final R3: `acceptanceProfile` is forwarded through the production JARVIS tool wrapper; required empty/unsupported file-evidence acceptance remains unverified.
 
 ## Verification
 
@@ -37,6 +41,7 @@ Second-round JARVIS bridge repair commit: `672be1daaee156a14752a9322f4a413d01503
 - JARVIS full verifier:
   - `./scripts/verify-cloud.sh > artifacts/verify-cloud-m0m1-r4-bridge-repair.log 2>&1`: PASS
   - `./scripts/verify-cloud.sh > artifacts/verify-cloud-m0m1-r1-r4-final.log 2>&1`: PASS
+  - `./scripts/verify-cloud.sh > artifacts/verify-cloud-m0m1-r1-r3-final.log 2>&1`: PASS
 - Difficult-review route:
   - completed before the second-round closure pass and returned explicit R1-R4 invariants.
 
