@@ -9,12 +9,12 @@ function productionAudit(root) {
   const cli = fs.readFileSync(path.join(sourceRoot, "bin/factoryv2.js"), "utf8");
   const state = root ? journal.load(root) : { events: [], channels: new Map() };
   const events = state.events || [];
-  const exercised = new Set(events.filter((event) => event.type === "channel.job.finished" && event.result?.verified).map((event) => event.channelId));
+  const exercised = new Set(events.filter((event) => trustedOrigin(event) && event.type === "channel.job.finished" && event.result?.verified).map((event) => event.channelId));
   const liveAgent = events.some((event) => liveReceipt(events, event));
   const daemonRestart = events.some((event) => controllerSurvival(events, event));
   const resumed = events.some((event) => resumedSession(events, event));
   const dispatch = events.some((event) => dispatchRetrieved(events, event));
-  const primedContext = events.some((event) => contextResolved(event));
+  const primedContext = events.some((event) => contextResolved(events, event));
   const tokenReceipt = events.some((event) => tokenEvidence(event));
   const quota = events.some((event) => quotaContinuation(events, event));
 
@@ -67,9 +67,10 @@ function dispatchRetrieved(events, event) {
     });
 }
 
-function contextResolved(event) {
+function contextResolved(events, event) {
   return trustedOrigin(event)
     && event.type === "channel.context.resolved"
+    && events.some((candidate) => trustedOrigin(candidate) && candidate.type === "channel.job.queued" && candidate.channelId === event.channelId && candidate.job?.id === event.jobId)
     && event.manifest?.sha256
     && Array.isArray(event.manifest.refs)
     && event.manifest.refs.some((ref) => ref.kind !== "fixture" && ref.sha256 && Number.isInteger(ref.bytes));
@@ -89,7 +90,7 @@ function quotaContinuation(events, event) {
 }
 
 function trustedOrigin(event) {
-  return !!event && event.origin !== "fixture";
+  return !!event && ["factoryv2", "adapter", "runtime", "live", "deterministic"].includes(event.origin);
 }
 
 function renderProductionAudit(root) {

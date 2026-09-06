@@ -51,6 +51,7 @@ async function main() {
   await contextFailure(fixture.definitionsPath, "made-up:required", "CONTEXT_UNKNOWN_REF");
   await contextFailure(fixture.definitionsPath, "file:missing.md", "CONTEXT_MISSING");
   await requiredRefFailure(fixture.definitionsPath);
+  await realJarvisPackRefsResolve(fixture.definitionsPath, fixture.dir);
   fs.writeFileSync(path.join(fixture.dir, "large.md"), "é".repeat(9000));
   await contextFailure(fixture.definitionsPath, "file:large.md", "CONTEXT_TOO_LARGE");
   fs.writeFileSync(path.join(fixture.dir, "outside.md"), "outside\n");
@@ -69,6 +70,7 @@ async function main() {
   await workerFailure(fixture.definitionsPath, (ids) => JSON.stringify({ done: true, channelId: ids.channelId, jobId: ids.jobId, summary: "created report", evidence: ["file:missing-report.txt"], contextManifestSha256: ids.manifestSha }), "EVIDENCE_UNSUPPORTED", { evidenceRequired: ["file:missing-report.txt"] });
   await workerFailure(fixture.definitionsPath, (ids) => JSON.stringify({ done: true, channelId: ids.channelId, jobId: ids.jobId, summary: "I cannot access the source or create the required report.", evidence: ["proof"], contextManifestSha256: ids.manifestSha }), "OBJECTIVE_UNVERIFIED");
   await workerFailure(fixture.definitionsPath, (ids) => JSON.stringify({ done: true, channelId: ids.channelId, jobId: ids.jobId, summary: "refused", evidence: ["proof"], refusal: true, contextManifestSha256: ids.manifestSha }), "WORKER_UNAVAILABLE");
+  await measuredTotalPredicateFails(fixture.definitionsPath, fixture.dir);
 
   const badPath = path.join(fixture.dir, "bad-channels.json");
   fs.writeFileSync(badPath, JSON.stringify([{ id: "missing", name: "Missing", cwd: path.join(fixture.dir, "absent"), engine: "claude", writeAuthority: "none" }]));
@@ -207,12 +209,79 @@ async function workerFailure(definitionsPath, responseFor, code, options = {}) {
   assert.strictEqual(registry.result("kaylas-store", `worker-${code}`).code, code);
 }
 
+async function measuredTotalPredicateFails(definitionsPath, dir) {
+  fs.writeFileSync(path.join(dir, "report.txt"), "measured_total=12\n");
+  const root = H.tmp("factoryv2-measured-total-");
+  const adapter = {
+    startThread: () => ({
+      run: async (prompt, hooks) => {
+        hooks.onThreadId("measured-session");
+        const hashes = [...prompt.matchAll(/"sha256":"([0-9a-f]{64})"/g)].map((match) => match[1]);
+        return {
+          engine: "claude",
+          sessionId: "measured-session",
+          finalResponse: JSON.stringify({
+            done: true,
+            channelId: "kaylas-store",
+            jobId: "measured-job",
+            summary: "The report meets the required total of 73.",
+            evidence: ["file:report.txt"],
+            contextManifestSha256: hashes.at(-1)
+          }),
+          metadata: {}
+        };
+      }
+    }),
+    resumeThread: () => { throw new Error("unexpected resume"); },
+    cancelThread: () => false
+  };
+  const registry = createChannelRegistry({ root, definitionsPath, adapterFactory: () => adapter });
+  registry.ensureDefaults();
+  registry.send("kaylas-store", "check measured total", {
+    jobId: "measured-job",
+    contextRefs: ["file:report.txt"],
+    evidenceRequired: ["file:report.txt"],
+    doneCondition: "Read report.txt and verify measured_total equals 73; a value of 12 fails."
+  });
+  const run = await registry.runNext();
+  assert.strictEqual(run.result.code, "OBJECTIVE_UNVERIFIED");
+  assert.strictEqual(run.result.verification.actual, "12");
+}
+
 async function requiredRefFailure(definitionsPath) {
   const registry = createChannelRegistry({ root: H.tmp("factoryv2-required-ref-"), definitionsPath });
   registry.ensureDefaults();
   registry.send("kaylas-store", "required ref must resolve", { jobId: "required-ref-job", primingRefs: ["capsule"], requiredRefs: ["file:missing.txt"] });
   const run = await registry.runNext();
   assert.strictEqual(run.result.code, "CONTEXT_MISSING");
+}
+
+async function realJarvisPackRefsResolve(definitionsPath, dir) {
+  for (const [kind, body] of [
+    ["store", "store fact: kaylas conversion source\n"],
+    ["project", "project fact: kaylas scoped workspace\n"],
+    ["active-priorities", "priority: improve conversion clarity\n"],
+    ["project-memory", "memory: Kaylas uses Shopify source truth\n"],
+    ["daily-log", "log: no live business write performed\n"],
+    ["skill", "commerce analytics skill source\n"],
+  ]) {
+    const folder = path.join(dir, ".factoryv2", "context", kind);
+    fs.mkdirSync(folder, { recursive: true });
+    fs.writeFileSync(path.join(folder, kind === "skill" ? "commerce-analytics.md" : "kaylas.md"), body);
+  }
+  const root = H.tmp("factoryv2-real-pack-refs-");
+  const registry = createChannelRegistry({ root, definitionsPath });
+  registry.ensureDefaults();
+  const refs = ["project:kaylas", "store:kaylas", "active-priorities:kaylas", "project-memory:kaylas", "daily-log:kaylas", "skill:commerce-analytics"];
+  registry.send("kaylas-store", "resolve real Kaylas pack refs", {
+    jobId: "real-pack-refs",
+    primingRefs: refs,
+    deterministic: { kind: "invoice-compare", records: [] }
+  });
+  await registry.runNext();
+  const context = journal.load(root).events.find((event) => event.type === "channel.context.resolved" && event.jobId === "real-pack-refs");
+  assert.deepStrictEqual(context.manifest.refs.map((ref) => ref.ref), refs);
+  assert.ok(context.manifest.refs.every((ref) => ref.sha256 && ref.bytes > 0));
 }
 
 async function sessionPathCannotEscape(definitionsPath) {

@@ -81,7 +81,7 @@ function createChannelRegistry({ root, adapterFactory = (config) => createAdapte
     const channel = status(channelId);
     if (!jobId) return channel.latestResult;
     const found = findJobResult(root, channel.id, jobId) || { ok: false, code: "RESULT_NOT_FOUND", jobId };
-    journal.append(root, { type: "channel.result.retrieved", channelId: channel.id, jobId, ok: !!found.ok, verified: !!found.verified });
+    journal.append(root, { type: "channel.result.retrieved", channelId: channel.id, jobId, ok: !!found.ok, verified: !!found.verified, origin: "factoryv2" });
     return found;
   }
 
@@ -98,8 +98,8 @@ function createChannelRegistry({ root, adapterFactory = (config) => createAdapte
       return duplicate;
     }
     const job = { id: jobId, requestId: envelope.requestId, prompt: envelope.objective, envelope, queuedAt: new Date().toISOString(), kind: options.kind || channel.modelPolicy?.kind || "implementation", deterministic: options.deterministic || null, attempt: 1, contextManifest: null };
-    journal.append(root, { type: "channel.job.admitted", channelId, jobId, requestId: envelope.requestId, payloadDigest: envelope.payloadDigest });
-    journal.append(root, { type: "channel.job.queued", channelId, job });
+    journal.append(root, { type: "channel.job.admitted", channelId, jobId, requestId: envelope.requestId, payloadDigest: envelope.payloadDigest, origin: "factoryv2" });
+    journal.append(root, { type: "channel.job.queued", channelId, job, origin: "factoryv2" });
     return job;
   }
 
@@ -161,17 +161,17 @@ function createChannelRegistry({ root, adapterFactory = (config) => createAdapte
       if (!context.ok) {
         const result = { ok: false, jobId: job.id, error: context.reason, code: context.code, ref: context.ref };
         persistSession(root, channel.id, job, result, null);
-        journal.append(root, { type: "channel.context.failed", channelId: channel.id, jobId: job.id, code: context.code, reason: context.reason, ref: context.ref });
-        journal.append(root, { type: "channel.job.failed", channelId: channel.id, jobId: job.id, result, error: context.reason });
+        journal.append(root, { type: "channel.context.failed", channelId: channel.id, jobId: job.id, code: context.code, reason: context.reason, ref: context.ref, origin: "factoryv2" });
+        journal.append(root, { type: "channel.job.failed", channelId: channel.id, jobId: job.id, result, error: context.reason, origin: "factoryv2" });
         return { progressed: true, channelId: channel.id, result };
       }
       job.contextManifest = context.manifest;
-      journal.append(root, { type: "channel.context.resolved", channelId: channel.id, jobId: job.id, manifest: context.manifest });
+      journal.append(root, { type: "channel.context.resolved", channelId: channel.id, jobId: job.id, manifest: context.manifest, origin: "factoryv2" });
       if (!channel.currentJob) journal.append(root, { type: "channel.job.started", channelId: channel.id, job });
       if (deterministic.canRun(job)) {
         const result = { ...deterministic.run(job), jobId: job.id, deterministic: true, verified: true, contextManifestSha256: context.manifest.sha256, finishedAt: new Date().toISOString() };
         persistSession(root, channel.id, job, result, context.manifest);
-        journal.append(root, { type: "channel.job.finished", channelId: channel.id, jobId: job.id, result });
+        journal.append(root, { type: "channel.job.finished", channelId: channel.id, jobId: job.id, result, origin: "factoryv2" });
         return { progressed: true, channelId: channel.id, result };
       }
       const policy = modelRouter.route({ kind: job.kind, engine: channel.engine, failedRepairs: job.failedRepairs || 0, preferred: job.modelFallback });
@@ -219,18 +219,19 @@ function createChannelRegistry({ root, adapterFactory = (config) => createAdapte
           modelPolicy: { ...policy, reusedSession: !!sessionId },
           capsule: channel.capsule,
           retrievedSources: JSON.stringify(context.manifest.refs.map((ref) => ({ ref: ref.ref, sha256: ref.sha256, bytes: ref.bytes }))),
-          selectedSkills: ["channel-operator", "task-compiler", "repo-capsule", "token-governor"]
+          selectedSkills: ["channel-operator", "task-compiler", "repo-capsule", "token-governor"],
+          origin: "factoryv2"
         });
-        const verification = verifyWorkerResult({ channelId: channel.id, job, receipt, contextManifest: context.manifest });
+        const verification = verifyWorkerResult({ channelId: channel.id, job, receipt, contextManifest: context.manifest, resolvedContext: context.resolved });
         if (!verification.ok) {
           const result = { ok: false, jobId: job.id, code: verification.code, error: verification.reason, verification, receipt: compactReceipt(receipt), finishedAt: new Date().toISOString() };
           persistSession(root, channel.id, job, result, context.manifest);
-          journal.append(root, { type: "channel.job.unverified", channelId: channel.id, jobId: job.id, result, receiptEventAt: receiptEvent.at });
+          journal.append(root, { type: "channel.job.unverified", channelId: channel.id, jobId: job.id, result, receiptEventAt: receiptEvent.at, origin: "factoryv2" });
           return { progressed: true, channelId: channel.id, result };
         }
         const result = { ok: true, jobId: job.id, verified: true, summary: verification.summary, evidence: verification.evidence, structured: verification.structured, receipt: compactReceipt(receipt), finishedAt: new Date().toISOString() };
         persistSession(root, channel.id, job, result, context.manifest);
-        journal.append(root, { type: "channel.job.finished", channelId: channel.id, jobId: job.id, result });
+        journal.append(root, { type: "channel.job.finished", channelId: channel.id, jobId: job.id, result, origin: "factoryv2" });
         return { progressed: true, channelId: channel.id, result };
       } catch (error) {
         const interruption = settleInterruption(root, channel.id, job, runner.action);

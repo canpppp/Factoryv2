@@ -1,6 +1,6 @@
 "use strict";
 
-function verifyWorkerResult({ channelId, job, receipt, contextManifest = null } = {}) {
+function verifyWorkerResult({ channelId, job, receipt, contextManifest = null, resolvedContext = [] } = {}) {
   const parsed = parseResult(receipt && receipt.finalResponse);
   if (!parsed.ok) return parsed;
   const value = parsed.value;
@@ -23,11 +23,43 @@ function verifyWorkerResult({ channelId, job, receipt, contextManifest = null } 
   const manifestRefs = new Set((contextManifest?.refs || []).map((ref) => ref.ref));
   const unsupportedFiles = required.filter((ref) => /^file:/i.test(ref) && !manifestRefs.has(ref));
   if (unsupportedFiles.length) return fail("EVIDENCE_UNSUPPORTED", "file evidence must be resolved in the context manifest", { unsupported: unsupportedFiles });
+  const predicate = evaluateDonePredicate(job.envelope?.acceptanceProfile || [], { evidence, resolvedContext });
+  if (!predicate.ok) return predicate;
   if (contextManifest && !value.contextManifestSha256) return fail("CONTEXT_MANIFEST_UNACKED", "worker did not acknowledge resolved context manifest");
   if (contextManifest && value.contextManifestSha256 !== contextManifest.sha256) {
     return fail("CONTEXT_MANIFEST_MISMATCH", "worker acknowledged a different context manifest");
   }
   return { ok: true, verified: true, summary, evidence, structured: value };
+}
+
+function evaluateDonePredicate(profile, { evidence, resolvedContext }) {
+  if (!profile.length) return { ok: true };
+  for (const predicate of profile) {
+    if (predicate.type !== "fieldEquals") return fail("ACCEPTANCE_UNSUPPORTED", "unsupported acceptance predicate", { predicate: predicate.type || null });
+    const checked = evaluateFieldEquals(predicate, { evidence, resolvedContext });
+    if (!checked.ok) return checked;
+  }
+  return { ok: true };
+}
+
+function evaluateFieldEquals(predicate, { evidence, resolvedContext }) {
+  const field = predicate.field;
+  const expected = String(predicate.equals);
+  const files = resolvedContext.filter((item) => item.kind === "file" && evidence.includes(item.ref) && (!predicate.ref || item.ref === predicate.ref));
+  if (!files.length) return fail("EVIDENCE_UNSUPPORTED", "done-condition predicate needs resolved file evidence", { predicate: `${field}=${expected}` });
+  for (const file of files) {
+    const actual = valueForField(file.content, field);
+    if (actual == null) continue;
+    if (String(actual) === expected) return { ok: true };
+    return fail("OBJECTIVE_UNVERIFIED", "resolved evidence does not satisfy the done condition", { predicate: `${field}=${expected}`, actual: String(actual), ref: file.ref });
+  }
+  return fail("EVIDENCE_UNSUPPORTED", "done-condition predicate was not found in resolved evidence", { predicate: `${field}=${expected}` });
+}
+
+function valueForField(content, field) {
+  const escaped = field.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = String(content || "").match(new RegExp(`(?:^|\\n)\\s*${escaped}\\s*[:=]\\s*([^\\n\\r]+)`, "i"));
+  return match ? match[1].trim() : null;
 }
 
 function parseResult(text) {

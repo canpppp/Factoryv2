@@ -39,10 +39,24 @@ function main() {
   assert.notStrictEqual(fixtureStatuses.get("E"), "live-proved");
   assert.notStrictEqual(fixtureStatuses.get("F"), "live-proved");
 
+  const omittedOrigin = H.tmp("factoryv2-audit-omitted-origin-");
+  journal.append(omittedOrigin, { type: "channel.job.queued", channelId: "jarvis-development", job: { id: "job-unmarked" } });
+  journal.append(omittedOrigin, { type: "channel.context.resolved", channelId: "jarvis-development", jobId: "job-unmarked", manifest: { sha256: "a".repeat(64), refs: [{ ref: "capsule", kind: "sop", sha256: "b".repeat(64), bytes: 12 }] } });
+  journal.append(omittedOrigin, { type: "channel.job.finished", channelId: "jarvis-development", jobId: "job-unmarked", result: { ok: true, verified: true } });
+  journal.append(omittedOrigin, { type: "channel.result.retrieved", channelId: "jarvis-development", jobId: "job-unmarked", ok: true, verified: true });
+  const omittedStatuses = new Map(audit.productionAudit(omittedOrigin).map((item) => [item.id, item.status]));
+  assert.notStrictEqual(omittedStatuses.get("D"), "live-proved");
+  assert.notStrictEqual(omittedStatuses.get("E"), "live-proved");
+  assert.notStrictEqual(omittedStatuses.get("F"), "live-proved");
+
   const quota = H.tmp("factoryv2-audit-quota-");
   journal.append(quota, { type: "provider.backoff.scheduled", provider: "claude", scenarioId: "quota-a", origin: "live" });
   journal.append(quota, { type: "deterministic.continuation", scenarioId: "quota-a", channelId: "invoice-audit", jobId: "job-q", origin: "live" });
   assert.strictEqual(new Map(audit.productionAudit(quota).map((item) => [item.id, item.status])).get("H"), "live-proved");
+  const omittedQuota = H.tmp("factoryv2-audit-omitted-quota-");
+  journal.append(omittedQuota, { type: "provider.backoff.scheduled", provider: "claude", scenarioId: "quota-a" });
+  journal.append(omittedQuota, { type: "deterministic.continuation", scenarioId: "quota-a", channelId: "invoice-audit", jobId: "job-q" });
+  assert.notStrictEqual(new Map(audit.productionAudit(omittedQuota).map((item) => [item.id, item.status])).get("H"), "live-proved");
 
   const earlyRetrieval = H.tmp("factoryv2-audit-early-retrieval-");
   journal.append(earlyRetrieval, { type: "channel.job.queued", channelId: "jarvis-development", job: { id: "job-early" } });
@@ -51,12 +65,12 @@ function main() {
   assert.notStrictEqual(new Map(audit.productionAudit(earlyRetrieval).map((item) => [item.id, item.status])).get("E"), "live-proved");
 
   const scoped = H.tmp("factoryv2-audit-scoped-");
-  journal.append(scoped, { type: "channel.job.queued", channelId: "jarvis-development", job: { id: "job-1" } });
+  journal.append(scoped, { type: "channel.job.queued", channelId: "jarvis-development", job: { id: "job-1" }, origin: "factoryv2" });
   journal.append(scoped, { type: "agent.receipt", channelId: "jarvis-development", jobId: "job-1", sessionId: "session-1", engine: "claude", origin: "live" });
-  journal.append(scoped, { type: "channel.context.resolved", channelId: "jarvis-development", jobId: "job-1", manifest: { sha256: "a".repeat(64), refs: [{ ref: "capsule", kind: "sop", sha256: "b".repeat(64), bytes: 12 }] } });
+  journal.append(scoped, { type: "channel.context.resolved", channelId: "jarvis-development", jobId: "job-1", origin: "factoryv2", manifest: { sha256: "a".repeat(64), refs: [{ ref: "capsule", kind: "sop", sha256: "b".repeat(64), bytes: 12 }] } });
   journal.append(scoped, { type: "token.usage", scope: "channel:jarvis-development:job-1", reusedSession: true, promptContextEstimate: 4, cacheReadTokens: 1, origin: "live" });
-  journal.append(scoped, { type: "channel.job.finished", channelId: "jarvis-development", jobId: "job-1", result: { ok: true, verified: true } });
-  journal.append(scoped, { type: "channel.result.retrieved", channelId: "jarvis-development", jobId: "job-1", ok: true, verified: true });
+  journal.append(scoped, { type: "channel.job.finished", channelId: "jarvis-development", jobId: "job-1", result: { ok: true, verified: true }, origin: "factoryv2" });
+  journal.append(scoped, { type: "channel.result.retrieved", channelId: "jarvis-development", jobId: "job-1", ok: true, verified: true, origin: "factoryv2" });
   const proved = new Map(audit.productionAudit(scoped).map((item) => [item.id, item.status]));
   assert.strictEqual(proved.get("A"), "live-proved");
   assert.strictEqual(proved.get("C"), "live-proved");

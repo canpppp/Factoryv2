@@ -22,6 +22,7 @@ function compileTask(channel, input = {}) {
     readWriteBoundary: input.readWriteBoundary || "read-only",
     effectBoundary: input.effectBoundary || input.readWriteBoundary || "read-only",
     doneCondition: bounded(input.doneCondition || "Return a concise evidence-backed result.", 1000, "doneCondition"),
+    acceptanceProfile: acceptanceProfile(input.acceptanceProfile, input.doneCondition),
     tokenBudget,
     timeoutMs,
     budgets: { tokenBudget, timeoutMs },
@@ -52,6 +53,31 @@ function clamp(value, min, max, fallback) {
   return Math.max(min, Math.min(max, Math.round(number)));
 }
 
+function acceptanceProfile(value, doneCondition = "") {
+  if (value == null) {
+    const predicate = predicateFromDoneCondition(doneCondition);
+    return predicate ? [predicate] : [];
+  }
+  if (!Array.isArray(value) || value.length > 8) throw new Error("acceptanceProfile exceeds 8 items");
+  return value.map((item) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) throw new Error("acceptanceProfile item must be an object");
+    if (item.type !== "fieldEquals") throw new Error("unsupported acceptanceProfile predicate");
+    return {
+      type: "fieldEquals",
+      ref: bounded(item.ref, 300, "acceptance ref"),
+      field: bounded(item.field, 100, "acceptance field"),
+      equals: bounded(String(item.equals), 300, "acceptance equals")
+    };
+  });
+}
+
+function predicateFromDoneCondition(doneCondition) {
+  const text = String(doneCondition || "");
+  const match = text.match(/\b([A-Za-z][A-Za-z0-9_-]{0,80})\b\s+(?:equals|=|is)\s+([A-Za-z0-9_.-]+)/i);
+  if (!match) return null;
+  return { type: "fieldEquals", ref: null, field: match[1], equals: match[2] };
+}
+
 function canonicalPayload(envelope) {
   const { payloadDigest, idempotencyKey, ...rest } = envelope;
   return stable(rest);
@@ -69,4 +95,4 @@ function digest(value) {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex");
 }
 
-module.exports = { compileTask, bounded, boundedList, clamp, canonicalPayload, digest };
+module.exports = { compileTask, bounded, boundedList, clamp, acceptanceProfile, canonicalPayload, digest };

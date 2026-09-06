@@ -46,11 +46,13 @@ function resolveRef(channel, ref, envelope = {}) {
     const wanted = value.split(":").slice(1).join(":");
     const expected = projectKey(channel.id);
     if (wanted !== expected && wanted !== channel.id) return fail("CONTEXT_FOREIGN_SCOPE", "project ref belongs to another channel");
-    return source(value, "project", channel.capsule || "", `channel-definition:${channel.definitionVersion || 1}`);
+    return resolveBoundSource(channel, "project", wanted, value) || fail("CONTEXT_MISSING", "project ref is not available in this channel scope");
   }
   if (/^project-memory:/i.test(value)) return resolveProjectMemory(channel, value);
-  if (/^skill:/i.test(value)) return resolveSkill(value);
-  if (/^active-priorities:/i.test(value)) return fail("CONTEXT_MISSING", "active priorities ref is not available in this channel scope");
+  if (/^store:/i.test(value)) return resolveScopedRequired(channel, "store", value);
+  if (/^daily-log:/i.test(value)) return resolveScopedRequired(channel, "daily-log", value);
+  if (/^skill:/i.test(value)) return resolveSkill(channel, value);
+  if (/^active-priorities:/i.test(value)) return resolveScopedRequired(channel, "active-priorities", value);
   if (/^source:/i.test(value)) return resolveFile(channel, value.slice(7), envelope);
   if (value === "capsule" || value === `capsule:${channel.id}` || value === `sop:${channel.id}`) {
     return source(value, "sop", channel.capsule || "", `channel-definition:${channel.definitionVersion || 1}`);
@@ -89,12 +91,36 @@ function resolveProjectMemory(channel, value) {
   const wanted = value.split(":").slice(1).join(":");
   const expected = projectKey(channel.id);
   if (wanted !== expected && wanted !== channel.id) return fail("CONTEXT_FOREIGN_SCOPE", "project memory ref belongs to another channel");
-  return fail("CONTEXT_MISSING", "project memory ref is not available in this channel scope");
+  return resolveBoundSource(channel, "project-memory", wanted, value) || fail("CONTEXT_MISSING", "project memory ref is not available in this channel scope");
 }
 
-function resolveSkill(value) {
+function resolveScopedRequired(channel, kind, value) {
+  const wanted = value.split(":").slice(1).join(":");
+  const expected = projectKey(channel.id);
+  if (wanted !== expected && wanted !== channel.id) return fail("CONTEXT_FOREIGN_SCOPE", `${kind} ref belongs to another channel`);
+  return resolveBoundSource(channel, kind, wanted, value) || fail("CONTEXT_MISSING", `${kind} ref is not available in this channel scope`);
+}
+
+function resolveBoundSource(channel, kind, key, ref) {
+  if (!channel.cwd) return null;
+  const candidates = [
+    path.join(".factoryv2", "context", kind, `${key}.md`),
+    path.join("factory-context", kind, `${key}.md`),
+    path.join("context", kind, `${key}.md`),
+  ];
+  for (const candidate of candidates) {
+    const resolved = resolveFile(channel, candidate, { requiredRefs: [`file:${candidate}`] });
+    if (resolved.ok) return { ...resolved, ref, kind };
+    if (!["CONTEXT_MISSING", "CONTEXT_NOT_FILE"].includes(resolved.code)) return resolved;
+  }
+  return null;
+}
+
+function resolveSkill(channel, value) {
   const name = value.split(":").slice(1).join(":");
   if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,80}$/.test(name)) return fail("CONTEXT_UNKNOWN_REF", "skill ref is invalid");
+  const bound = resolveBoundSource(channel, "skill", name, value);
+  if (bound) return bound;
   const root = path.join(__dirname, "..", "skills");
   const indexPath = path.join(root, "index.json");
   let index;

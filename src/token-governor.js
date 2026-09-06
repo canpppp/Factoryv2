@@ -6,12 +6,13 @@ function estimateTokens(text) {
   return Math.ceil(Buffer.byteLength(String(text || ""), "utf8") / 4);
 }
 
-function record(root, { scope, prompt, receipt, modelPolicy, escalationReason = null, capsule = "", retrievedSources = "", repeatedContextAvoidedTokens = 0, selectedSkills = [] }) {
+function record(root, { scope, prompt, receipt, modelPolicy, escalationReason = null, capsule = "", retrievedSources = "", repeatedContextAvoidedTokens = 0, selectedSkills = [], origin = "factoryv2" }) {
   const metadata = receipt?.metadata || {};
   const promptContextEstimate = estimateTokens(prompt);
   const inputTokens = metadata.inputTokens ?? null;
   const event = journal.append(root, {
     type: "token.usage",
+    origin,
     scope,
     engine: receipt?.engine || null,
     model: metadata.model || modelPolicy?.model || null,
