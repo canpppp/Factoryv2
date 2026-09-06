@@ -64,12 +64,33 @@ function main() {
   journal.append(earlyRetrieval, { type: "channel.job.finished", channelId: "jarvis-development", jobId: "job-early", result: { ok: true, verified: true } });
   assert.notStrictEqual(new Map(audit.productionAudit(earlyRetrieval).map((item) => [item.id, item.status])).get("E"), "live-proved");
 
+  const wrongRestart = H.tmp("factoryv2-audit-wrong-restart-");
+  journal.append(wrongRestart, { type: "controller.stopped", scenarioId: "restart-a", jobId: "job-live", origin: "live", at: "2026-09-06T10:00:00.000Z" });
+  journal.append(wrongRestart, { type: "channel.job.finished", scenarioId: "restart-a", channelId: "jarvis-development", jobId: "job-other", result: { ok: true, verified: true }, origin: "live", at: "2026-09-06T10:00:01.000Z" });
+  journal.append(wrongRestart, { type: "channel.job.finished", scenarioId: "restart-a", channelId: "jarvis-development", jobId: "job-live", result: { ok: true, verified: true }, origin: "live", at: "2026-09-06T09:59:59.000Z" });
+  assert.notStrictEqual(new Map(audit.productionAudit(wrongRestart).map((item) => [item.id, item.status])).get("B"), "live-proved");
+
+  const restart = H.tmp("factoryv2-audit-restart-");
+  journal.append(restart, { type: "controller.stopped", scenarioId: "restart-a", jobId: "job-live", origin: "live", at: "2026-09-06T10:00:00.000Z" });
+  journal.append(restart, { type: "channel.job.finished", scenarioId: "restart-a", channelId: "jarvis-development", jobId: "job-live", result: { ok: true, verified: true }, origin: "live", at: "2026-09-06T10:00:01.000Z" });
+  assert.strictEqual(new Map(audit.productionAudit(restart).map((item) => [item.id, item.status])).get("B"), "live-proved");
+
+  const wrongResume = H.tmp("factoryv2-audit-wrong-resume-");
+  journal.append(wrongResume, { type: "agent.receipt", channelId: "jarvis-development", jobId: "job-1", sessionId: "session-1", engine: "codex", origin: "live" });
+  journal.append(wrongResume, { type: "token.usage", scope: "channel:jarvis-development:job-1", engine: "codex", sessionId: "session-1", reusedSession: true, promptContextEstimate: 4, cacheReadTokens: 1, origin: "live" });
+  assert.notStrictEqual(new Map(audit.productionAudit(wrongResume).map((item) => [item.id, item.status])).get("C"), "live-proved");
+
+  const resume = H.tmp("factoryv2-audit-resume-");
+  journal.append(resume, { type: "agent.receipt", channelId: "jarvis-development", jobId: "job-1", sessionId: "session-1", engine: "claude", origin: "live" });
+  journal.append(resume, { type: "token.usage", scope: "channel:jarvis-development:job-1", engine: "claude", sessionId: "session-1", reusedSession: true, promptContextEstimate: 4, cacheReadTokens: 1, origin: "live" });
+  assert.strictEqual(new Map(audit.productionAudit(resume).map((item) => [item.id, item.status])).get("C"), "live-proved");
+
   const scoped = H.tmp("factoryv2-audit-scoped-");
   journal.append(scoped, { type: "channel.job.queued", channelId: "jarvis-development", job: { id: "job-1" }, origin: "factoryv2", evidenceOrigin: "jarvis-bridge" });
   journal.append(scoped, { type: "agent.receipt", channelId: "jarvis-development", jobId: "job-1", sessionId: "session-1", engine: "claude", origin: "live" });
   journal.append(scoped, { type: "channel.context.resolved", channelId: "jarvis-development", jobId: "job-1", origin: "factoryv2", manifest: { sha256: "a".repeat(64), refs: [{ ref: "capsule", kind: "sop", sha256: "b".repeat(64), bytes: 12 }] } });
-  journal.append(scoped, { type: "channel.worker.input", channelId: "jarvis-development", jobId: "job-1", origin: "factoryv2", evidenceOrigin: "provider", contextManifestSha256: "a".repeat(64), resolvedRefs: ["capsule"] });
-  journal.append(scoped, { type: "token.usage", scope: "channel:jarvis-development:job-1", reusedSession: true, promptContextEstimate: 4, cacheReadTokens: 1, origin: "live" });
+  journal.append(scoped, { type: "channel.worker.input", channelId: "jarvis-development", jobId: "job-1", sessionId: "session-1", engine: "claude", origin: "factoryv2", evidenceOrigin: "provider", contextManifestSha256: "a".repeat(64), resolvedRefs: ["capsule"] });
+  journal.append(scoped, { type: "token.usage", scope: "channel:jarvis-development:job-1", engine: "claude", sessionId: "session-1", reusedSession: true, promptContextEstimate: 4, cacheReadTokens: 1, origin: "live" });
   journal.append(scoped, { type: "channel.job.finished", channelId: "jarvis-development", jobId: "job-1", result: { ok: true, verified: true }, origin: "factoryv2", evidenceOrigin: "provider" });
   journal.append(scoped, { type: "channel.result.retrieved", channelId: "jarvis-development", jobId: "job-1", ok: true, verified: true, origin: "factoryv2", evidenceOrigin: "jarvis-bridge" });
   const proved = new Map(audit.productionAudit(scoped).map((item) => [item.id, item.status]));

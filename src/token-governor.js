@@ -15,6 +15,7 @@ function record(root, { scope, prompt, receipt, modelPolicy, escalationReason = 
     origin,
     scope,
     engine: receipt?.engine || null,
+    sessionId: receipt?.sessionId || receipt?.threadId || null,
     model: metadata.model || modelPolicy?.model || null,
     promptContextEstimate,
     contextTokens: inputTokens ?? promptContextEstimate,

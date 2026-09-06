@@ -84,7 +84,7 @@ function needsAcceptance(doneCondition, evidenceRequired) {
   return !!String(doneCondition || "").trim()
     && !/^Return a concise evidence-backed result\.$/.test(String(doneCondition).trim())
     && Array.isArray(evidenceRequired)
-    && evidenceRequired.some((ref) => /^file:/i.test(String(ref || "")));
+    && evidenceRequired.length > 0;
 }
 
 function canonicalPayload(envelope) {

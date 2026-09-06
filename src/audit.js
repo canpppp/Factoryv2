@@ -40,14 +40,25 @@ function liveReceipt(events, event) {
 }
 
 function controllerSurvival(events, event) {
-  if (event.type !== "controller.stopped" || !event.scenarioId || !trustedOrigin(event)) return false;
-  return events.some((candidate) => trustedOrigin(candidate) && candidate.type === "channel.job.finished" && candidate.scenarioId === event.scenarioId && candidate.result?.verified);
+  if (event.type !== "controller.stopped" || !event.scenarioId || !event.jobId || !trustedOrigin(event)) return false;
+  const stoppedAt = Date.parse(event.at || "");
+  return events.some((candidate) => {
+    const finishedAt = Date.parse(candidate.at || "");
+    return trustedOrigin(candidate)
+      && candidate.type === "channel.job.finished"
+      && candidate.scenarioId === event.scenarioId
+      && candidate.jobId === event.jobId
+      && candidate.result?.verified
+      && Number.isFinite(stoppedAt)
+      && Number.isFinite(finishedAt)
+      && finishedAt > stoppedAt;
+  });
 }
 
 function resumedSession(events, event) {
-  if (event.type !== "token.usage" || !event.reusedSession || !trustedOrigin(event)) return false;
+  if (event.type !== "token.usage" || !event.reusedSession || !trustedOrigin(event) || event.engine !== "claude" || !event.sessionId) return false;
   const [, channelId, jobId] = String(event.scope || "").split(":");
-  return !!(channelId && jobId) && events.some((candidate) => trustedOrigin(candidate) && candidate.type === "agent.receipt" && candidate.channelId === channelId && candidate.jobId === jobId && candidate.sessionId);
+  return !!(channelId && jobId) && events.some((candidate) => trustedOrigin(candidate) && candidate.type === "agent.receipt" && candidate.channelId === channelId && candidate.jobId === jobId && candidate.sessionId === event.sessionId && candidate.engine === "claude");
 }
 
 function dispatchRetrieved(events, event) {
@@ -71,7 +82,7 @@ function contextResolved(events, event) {
   return trustedOrigin(event)
     && event.type === "channel.context.resolved"
     && events.some((candidate) => trustedOrigin(candidate) && candidate.type === "channel.job.queued" && candidate.channelId === event.channelId && candidate.job?.id === event.jobId)
-    && events.some((candidate) => trustedOrigin(candidate) && candidate.type === "channel.worker.input" && candidate.evidenceOrigin === "provider" && candidate.channelId === event.channelId && candidate.jobId === event.jobId && candidate.contextManifestSha256 === event.manifest?.sha256)
+    && events.some((candidate) => trustedOrigin(candidate) && candidate.type === "channel.worker.input" && candidate.evidenceOrigin === "provider" && candidate.channelId === event.channelId && candidate.jobId === event.jobId && candidate.contextManifestSha256 === event.manifest?.sha256 && candidate.sessionId && candidate.engine)
     && event.manifest?.sha256
     && Array.isArray(event.manifest.refs)
     && event.manifest.refs.some((ref) => ref.kind !== "fixture" && ref.sha256 && Number.isInteger(ref.bytes));

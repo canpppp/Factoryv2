@@ -8,6 +8,7 @@ const path = require("node:path");
 const { createChannelRegistry } = require("../src/channels");
 const { createChannelApi, handle } = require("../src/channel-api");
 const { createChannelTools } = require("../src/jarvis-tools");
+const audit = require("../src/audit");
 const journal = require("../src/journal");
 const H = require("./helpers");
 
@@ -69,8 +70,11 @@ async function main() {
   await workerFailure(fixture.definitionsPath, (ids) => JSON.stringify({ done: true, channelId: ids.channelId, jobId: ids.jobId, summary: "completed analysis", evidence: [], contextManifestSha256: ids.manifestSha }), "EVIDENCE_MISSING");
   await workerFailure(fixture.definitionsPath, (ids) => JSON.stringify({ done: true, channelId: ids.channelId, jobId: ids.jobId, summary: "created report", evidence: ["file:missing-report.txt"], contextManifestSha256: ids.manifestSha }), "EVIDENCE_UNSUPPORTED", { evidenceRequired: ["file:missing-report.txt"] });
   await workerFailure(fixture.definitionsPath, (ids) => JSON.stringify({ done: true, channelId: ids.channelId, jobId: ids.jobId, summary: "completed analysis", evidence: ["file:report.txt"], contextManifestSha256: ids.manifestSha }), "ACCEPTANCE_UNSUPPORTED", { evidenceRequired: ["file:report.txt"], contextRefs: ["file:report.txt"], acceptanceProfile: [] });
+  fs.writeFileSync(path.join(fixture.dir, "ledger"), "reconciled=false\n");
+  await workerFailure(fixture.definitionsPath, (ids) => JSON.stringify({ done: true, channelId: ids.channelId, jobId: ids.jobId, summary: "reconciled against the ledger", evidence: ["source:ledger"], contextManifestSha256: ids.manifestSha }), "ACCEPTANCE_UNSUPPORTED", { evidenceRequired: ["source:ledger"], contextRefs: ["source:ledger"], doneCondition: "Verify every invoice against the ledger before reporting completion." });
   await workerFailure(fixture.definitionsPath, (ids) => JSON.stringify({ done: true, channelId: ids.channelId, jobId: ids.jobId, summary: "I cannot access the source or create the required report.", evidence: ["proof"], contextManifestSha256: ids.manifestSha }), "OBJECTIVE_UNVERIFIED");
   await workerFailure(fixture.definitionsPath, (ids) => JSON.stringify({ done: true, channelId: ids.channelId, jobId: ids.jobId, summary: "refused", evidence: ["proof"], refusal: true, contextManifestSha256: ids.manifestSha }), "WORKER_UNAVAILABLE");
+  await failedProviderDoesNotLiveProveWorkerInput(fixture.definitionsPath);
   await measuredTotalPredicateFails(fixture.definitionsPath, fixture.dir);
   await rpcAcceptanceProfileIsEnforced(fixture.definitionsPath, fixture.dir);
 
@@ -206,10 +210,33 @@ async function workerFailure(definitionsPath, responseFor, code, options = {}) {
   const registry = createChannelRegistry({ root, definitionsPath, adapterFactory: () => adapter });
   registry.ensureDefaults();
   if (options.contextRefs?.includes("file:report.txt")) fs.writeFileSync(path.join(path.dirname(definitionsPath), "report.txt"), "measured_total=12\n");
-  registry.send("kaylas-store", `worker failure ${code}`, { jobId: `worker-${code}`, evidenceRequired: options.evidenceRequired || ["proof"], contextRefs: options.contextRefs || [], acceptanceProfile: options.acceptanceProfile });
+  registry.send("kaylas-store", `worker failure ${code}`, { jobId: `worker-${code}-${String(options.evidenceRequired || "").replace(/[^a-z0-9]+/gi, "-")}`, evidenceRequired: options.evidenceRequired || ["proof"], contextRefs: options.contextRefs || [], acceptanceProfile: options.acceptanceProfile, doneCondition: options.doneCondition });
   const run = await registry.runNext();
   assert.strictEqual(run.result.code, code);
-  assert.strictEqual(registry.result("kaylas-store", `worker-${code}`).code, code);
+  assert.strictEqual(registry.result("kaylas-store", run.result.jobId).code, code);
+}
+
+async function failedProviderDoesNotLiveProveWorkerInput(definitionsPath) {
+  const root = H.tmp("factoryv2-failed-provider-proof-");
+  const adapter = {
+    startThread: () => ({
+      run: async (_prompt, hooks) => {
+        hooks.onThreadId("failed-provider-session");
+        const error = new Error("fixture provider failure");
+        error.code = "CHANNEL_FAILED";
+        throw error;
+      }
+    }),
+    resumeThread: () => { throw new Error("unexpected resume"); },
+    cancelThread: () => false
+  };
+  const registry = createChannelRegistry({ root, definitionsPath, adapterFactory: () => adapter });
+  registry.ensureDefaults();
+  registry.send("kaylas-store", "failed provider must not prove worker input", { jobId: "failed-provider-proof", primingRefs: ["capsule"] });
+  const run = await registry.runNext();
+  assert.strictEqual(run.result.code, "CHANNEL_FAILED");
+  assert.strictEqual(journal.load(root).events.filter((event) => event.type === "channel.worker.input").length, 0);
+  assert.notStrictEqual(new Map(audit.productionAudit(root).map((item) => [item.id, item.status])).get("F"), "live-proved");
 }
 
 async function rpcAcceptanceProfileIsEnforced(definitionsPath, dir) {

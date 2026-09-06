@@ -188,7 +188,6 @@ function createChannelRegistry({ root, adapterFactory = (config) => createAdapte
       const sessionId = channel.sessionId || null;
       const agentThread = sessionId ? adapter.resumeThread(sessionId, options) : adapter.startThread(options);
       const prompt = channelPrompt(channel, job, context);
-      journal.append(root, { type: "channel.worker.input", channelId: channel.id, jobId: job.id, contextManifestSha256: context.manifest.sha256, resolvedRefs: context.manifest.refs.map((ref) => ref.ref), origin: "factoryv2", evidenceOrigin: "provider" });
       const runner = { adapter, sessionId, action: null };
       active.set(channel.id, runner);
       try {
@@ -213,6 +212,17 @@ function createChannelRegistry({ root, adapterFactory = (config) => createAdapte
           engine: receipt.engine || channel.engine,
           origin: receipt.origin || "adapter",
           finalResponseDigest: digest(receipt.finalResponse)
+        });
+        journal.append(root, {
+          type: "channel.worker.input",
+          channelId: channel.id,
+          jobId: job.id,
+          sessionId: receipt.sessionId || receipt.threadId || runner.sessionId || null,
+          engine: receipt.engine || channel.engine,
+          contextManifestSha256: context.manifest.sha256,
+          resolvedRefs: context.manifest.refs.map((ref) => ref.ref),
+          origin: "factoryv2",
+          evidenceOrigin: "provider"
         });
         tokenGovernor.record(root, {
           scope: `channel:${channel.id}:${job.id}`,
