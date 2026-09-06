@@ -22,13 +22,20 @@ function inventory(token, namespaces = []) {
   const result = [];
   for (const name of fs.readdirSync("/proc")) {
     if (!/^\d+$/.test(name)) continue;
+    let belongs = false;
     try {
       if (fs.statSync(`/proc/${name}`).uid !== process.getuid()) continue;
+      const argv = fs.readFileSync(`/proc/${name}/cmdline`, "utf8").split("\0");
+      belongs = argv.includes(token);
       const current = identity(name);
       if (!current) continue;
-      const argv = fs.readFileSync(`/proc/${name}/cmdline`, "utf8").split("\0");
-      if (argv.includes(token) || namespaces.includes(current.namespace)) result.push(current);
-    } catch (error) { if (!["ENOENT", "ESRCH"].includes(error.code)) throw error; }
+      if (belongs || namespaces.includes(current.namespace)) result.push(current);
+    } catch (error) {
+      // CI also owns unrelated, non-dumpable services. A tagged identity must
+      // remain observable; inaccessible foreign services are not test targets.
+      if (error.code === "EACCES" && !belongs) continue;
+      if (!["ENOENT", "ESRCH"].includes(error.code)) throw error;
+    }
   }
   return result;
 }
