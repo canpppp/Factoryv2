@@ -37,6 +37,8 @@ async function main() {
   for (const item of expected) {
     const created = after.events.find((e) => e.type === "mission.created" && e.missionId === item.missionId);
     assert.deepEqual(created.mission, item.mission);
+    for (const [key, value] of Object.entries(templates.find((t) => t.id === item.missionId))) assert.deepEqual(created.mission[key], value);
+    assert.deepEqual(created.mission.envelope, before.goals.get(goal.id).envelope);
   }
   assert.equal(after.events.some((e) => /worker.attempt|mission.role.session|integration|candidate|release/.test(e.type)), false);
   assert.deepEqual(fs.readdirSync(journal.paths(root).worktrees), []);

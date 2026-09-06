@@ -129,7 +129,13 @@ async function main() {
         const multiPlan = planGoal(journal.load(root).goals.get(multi.id));
         const mapping = JSON.parse(await cli("prepare", "--goal", multi.id, "--request-id", "multi-success"));
         assert.deepEqual(mapping.missionIds, ["metadata-one", "metadata-two"]);
-        for (const item of multiPlan) assert.deepEqual(journal.load(root).events.find((e) => e.type === "mission.created" && e.missionId === item.missionId).mission, item.mission);
+        for (const item of multiPlan) {
+          const state = journal.load(root), created = state.events.find((e) => e.type === "mission.created" && e.missionId === item.missionId).mission;
+          assert.deepEqual(created, item.mission);
+          const template = state.goals.get(multi.id).missionOverrides.missions.find((t) => t.id === item.missionId);
+          for (const [key, value] of Object.entries(template)) assert.deepEqual(created[key], value);
+          assert.deepEqual(created.envelope, state.goals.get(multi.id).envelope);
+        }
         assert.equal(journal.load(root).events.filter((e) => e.type === "mission.role.session" && e.missionId !== missionId).length, 0);
         record = { mode, preparation: prepared, execution: result, multiMapping: mapping };
       } else {
