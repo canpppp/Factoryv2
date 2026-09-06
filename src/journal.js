@@ -68,10 +68,30 @@ function materialize(events) {
   const receipts = [];
   const channels = new Map();
   const providerBackoffs = new Map();
+  const preparations = new Map();
   for (const e of events) {
     if (e.type === "goal.enqueued") goals.set(e.goalId, { id: e.goalId, ...e.goal, state: "queued" });
     if (e.type === "goal.state") Object.assign(goals.get(e.goalId) || {}, { state: e.to, updatedAt: e.at });
-    if (e.type === "mission.created") missions.set(e.missionId, { ...e.mission, id: e.missionId, roleSessions: {}, state: "queued" });
+    if (e.type === "mission.created") missions.set(e.missionId, { ...e.mission, id: e.missionId, roleSessions: {}, state: e.preparationRequestId ? "preparing" : "queued",
+      ...(e.preparationRequestId ? { preparationRequestId: e.preparationRequestId } : {}) });
+    if (e.type === "goal.preparation.started") {
+      preparations.set(e.request.id, structuredClone(e.request));
+      Object.assign(goals.get(e.request.goalId) || {}, { state: "preparing" });
+    }
+    if (["goal.preparation.finished", "goal.preparation.blocked"].includes(e.type)) {
+      const request = preparations.get(e.requestId);
+      if (request) {
+        Object.assign(request, e.patch);
+        Object.assign(goals.get(request.goalId) || {}, { state: request.status === "prepared" ? "running" : "blocked" });
+        for (const missionId of request.missionIds) {
+          const mission = missions.get(missionId);
+          if (mission?.preparationRequestId === request.id) {
+            mission.state = request.status === "prepared" ? "queued" : "blocked";
+            if (request.status !== "prepared") mission.blocker = "PREPARATION_BLOCKED";
+          }
+        }
+      }
+    }
     if (e.type === "mission.state") Object.assign(missions.get(e.missionId) || {}, {
       state: e.to,
       blocker: e.blocker || null,
@@ -148,7 +168,7 @@ function materialize(events) {
     if (e.type === "provider.backoff.scheduled") providerBackoffs.set(e.provider, { until: e.until, attempt: e.attempt, reason: e.reason });
     if (e.type === "provider.backoff.cleared") providerBackoffs.delete(e.provider);
   }
-  return { goals, missions, receipts, channels, providerBackoffs };
+  return { goals, missions, receipts, channels, providerBackoffs, preparations };
 }
 
 function load(root) {

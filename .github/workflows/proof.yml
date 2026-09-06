@@ -24,6 +24,8 @@ jobs:
         run: node tests/m02-r1-proof.test.js
       - name: Controller role policy and durable session consumers
         run: node tests/controller-policy-proof.test.js
+      - name: Explicit goal preparation consumers (synthetic Linux only)
+        run: node tests/goal-consumers-proof.test.js
       - name: Daemon owner attachment and startup fencing (synthetic Linux only)
         run: node tests/owner-consumers-proof.test.js
       - name: Linux whole-namespace ownership (bounded synthetic fixtures)

@@ -11,7 +11,7 @@ const { createChannelRegistry } = require("../src/channels");
 const { install: installLaunchd } = require("../src/launchd");
 
 const argv = process.argv.slice(2);
-const FLAGS_WITH_VALUES = new Set(["--root", "--repo", "--max-steps", "--engine", "--role-policies", "--mission", "--request-id"]);
+const FLAGS_WITH_VALUES = new Set(["--root", "--repo", "--max-steps", "--engine", "--role-policies", "--mission", "--request-id", "--goal"]);
 function positionals() {
   const out = [];
   for (let i = 0; i < argv.length; i++) {
@@ -49,6 +49,16 @@ async function main() {
     const controller = createController({ root, rolePoliciesPath: flag("role-policies") });
     const goal = controller.enqueueGoal({ goal: text, repo: path.resolve(repo) });
     console.log(`queued ${goal.id}`);
+    return;
+  }
+  if (cmd === "prepare") {
+    const allowed = new Set(["--root", "--goal", "--request-id"]);
+    for (let i = 1; i < argv.length; i += 2) {
+      if (!allowed.has(argv[i]) || typeof argv[i + 1] !== "string" || argv[i + 1].startsWith("--")) die("REQUEST_INVALID: prepare accepts root, goal and request-id only");
+    }
+    const result = await require("../src/owner-client").call(root, "mission.prepare", { requestId: flag("request-id"), goalId: flag("goal") });
+    console.log(JSON.stringify(result));
+    if (result.status !== "prepared") process.exitCode = 1;
     return;
   }
   if (cmd === "run" && !argv.includes("--local-test") || cmd === "result") {

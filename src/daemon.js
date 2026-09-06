@@ -8,6 +8,7 @@ const { createAdapter } = require("./adapters");
 const { createChannelRegistry } = require("./channels");
 const { createChannelApi } = require("./channel-api");
 const { createMissionRequests } = require("./mission-requests");
+const { createGoalPreparation } = require("./goal-preparation");
 
 const NOTIFICATION_TYPES = new Set(["READY_FOR_HUMAN_CHECK", "HUMAN_DECISION_REQUIRED", "BLOCKED_EXTERNAL", "SHIPPED"]);
 
@@ -19,9 +20,10 @@ function createDaemon({ root, engine = process.env.FACTORYV2_ENGINE || "claude",
   const requests = createMissionRequests({ root,
     controller: () => createController({ root, adapterFactory: makeAdapter, rolePolicies, rolePoliciesPath }),
     owner: () => executionOwner });
+  const preparation = createGoalPreparation({ root, owner: () => executionOwner });
   const channelApi = createChannelApi({ root, registry: channels,
-    extraTools: { "mission.run": requests.admit, "mission.result": requests.result },
-    beforeReady: (owner) => { executionOwner = owner; requests.reconcile(); } });
+    extraTools: { "mission.run": requests.admit, "mission.result": requests.result, "mission.prepare": preparation.prepare },
+    beforeReady: (owner) => { executionOwner = owner; preparation.reconcile(); requests.reconcile(); } });
   let stopping = false;
 
   async function runOnce({ attached = false } = {}) {

@@ -29,7 +29,8 @@ function createMissionRequests({ root, controller, owner }) {
   function result({ requestId, ...rest } = {}) {
     owner().assertOwned();
     if (!id(requestId) || Object.keys(rest).length) fail("REQUEST_INVALID");
-    const request = load(root).requests.get(requestId);
+    const state = load(root);
+    const request = state.requests.get(requestId) || state.preparations.get(requestId);
     if (!request) fail("REQUEST_NOT_FOUND");
     return request;
   }
@@ -39,9 +40,11 @@ function createMissionRequests({ root, controller, owner }) {
     if (!id(requestId) || !id(missionId) || !Number.isSafeInteger(maxSteps) || maxSteps < 1 || maxSteps > 100 || Object.keys(rest).length) fail("REQUEST_INVALID");
     const digest = createHash("sha256").update(JSON.stringify({ missionId, maxSteps })).digest("hex");
     const state = load(root), previous = state.requests.get(requestId);
+    if (state.preparations.has(requestId)) fail("REQUEST_CONFLICT");
     if (previous) { if (previous.digest !== digest) fail("REQUEST_CONFLICT"); return previous; }
     const mission = state.missions.get(missionId);
     if (!mission) fail("MISSION_NOT_FOUND");
+    if (mission.preparationRequestId && state.preparations.get(mission.preparationRequestId)?.status !== "prepared") fail("PREPARATION_BLOCKED");
     if ([...state.requests.values()].some((r) => r.missionId === missionId && r.status !== "finished")) fail("MISSION_REQUEST_BLOCKED");
     if (Object.values(mission.roleSessions || {}).some((r) => r.status !== "settled")) fail("RECONCILIATION_REQUIRED");
     const request = { id: requestId, missionId, maxSteps, digest, status: "admitted", generation: owner().record.generation, admittedAt: new Date().toISOString() };

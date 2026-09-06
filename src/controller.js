@@ -22,6 +22,33 @@ function slug(s) {
   return String(s || "goal").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 42) || "goal";
 }
 
+function planGoal(goal) {
+  rolePolicy.assertMissionInput(goal.missionOverrides);
+  const templates = Array.isArray(goal.missionOverrides?.missions) && goal.missionOverrides.missions.length
+    ? goal.missionOverrides.missions : [goal.missionOverrides || {}];
+  return templates.map((template, index) => {
+    const missionId = template.id || `${goal.id.replace(/^goal-/, "mission-")}-${index + 1}`;
+    const mission = {
+      goalId: goal.id,
+      title: "Factory-generated mission",
+      repo: goal.repo,
+      branch: template.branch || `factory/${missionId.slice(0, 64)}`,
+      ownedFiles: ["src/**", "README.md", "docs/**", "tests/**"],
+      verifyCommands: ["npm test"],
+      acceptanceCommands: [],
+      trustDomain: (goal.envelope && goal.envelope.trustDomain) || "jarvis",
+      envelope: goal.envelope,
+      maxRepairRounds: MAX_REPAIRS,
+      attempts: 0,
+      repairRounds: 0,
+      replacements: 0,
+      ...template
+    };
+    delete mission.missions;
+    return { missionId, mission };
+  });
+}
+
 function createController({ root, adapter, adapterFactory = createAdapter, rolePolicies, rolePoliciesPath }) {
   if (!root) throw new Error("controller needs root");
   const trustedPolicies = rolePolicy.loadRolePolicies({ rolePolicies, rolePoliciesPath });
@@ -55,31 +82,9 @@ function createController({ root, adapter, adapterFactory = createAdapter, roleP
   }
 
   function architect(goal) {
-    rolePolicy.assertMissionInput(goal.missionOverrides);
+    const plan = planGoal(goal);
     emit({ type: "architect.started", goalId: goal.id });
-    const templates = Array.isArray(goal.missionOverrides.missions) && goal.missionOverrides.missions.length
-      ? goal.missionOverrides.missions
-      : [goal.missionOverrides || {}];
-    templates.forEach((template, index) => {
-      const missionId = template.id || `${goal.id.replace(/^goal-/, "mission-")}-${index + 1}`;
-      const branch = template.branch || `factory/${missionId.slice(0, 64)}`;
-      const mission = {
-      goalId: goal.id,
-      title: "Factory-generated mission",
-      repo: goal.repo,
-      branch,
-      ownedFiles: ["src/**", "README.md", "docs/**", "tests/**"],
-      verifyCommands: ["npm test"],
-      acceptanceCommands: [],
-      trustDomain: (goal.envelope && goal.envelope.trustDomain) || "jarvis",
-      envelope: goal.envelope,
-      maxRepairRounds: MAX_REPAIRS,
-      attempts: 0,
-      repairRounds: 0,
-      replacements: 0,
-      ...template
-      };
-      delete mission.missions;
+    plan.forEach(({ missionId, mission }) => {
       emit({ type: "mission.created", goalId: goal.id, missionId, mission });
     });
     emit({ type: "goal.state", goalId: goal.id, from: goal.state, to: "running" });
@@ -326,13 +331,18 @@ function createController({ root, adapter, adapterFactory = createAdapter, roleP
   async function step({ missionId } = {}) {
     let state = journal.load(root);
     if (!state.ok) return { progressed: false, summary: `blocked: ${state.reason}` };
+    const requested = state.missions.get(missionId);
+    if (requested?.preparationRequestId && state.preparations.get(requested.preparationRequestId)?.status !== "prepared") {
+      return { progressed: false, code: "PREPARATION_BLOCKED", summary: "mission preparation is unresolved" };
+    }
     const queuedGoal = !missionId && [...state.goals.values()].find((g) => g.state === "queued");
     if (queuedGoal) {
       architect(queuedGoal);
       return { progressed: true, summary: "architected goal" };
     }
     state = journal.load(root);
-    const mission = [...state.missions.values()].find((m) => (!missionId || m.id === missionId) && isRunnable(m, state.missions));
+    const mission = [...state.missions.values()].find((m) => (!missionId || m.id === missionId)
+      && (!m.preparationRequestId || state.preparations.get(m.preparationRequestId)?.status === "prepared") && isRunnable(m, state.missions));
     if (!mission) return { progressed: false, summary: "idle" };
     try {
       checkSettled(mission);
@@ -447,4 +457,4 @@ function renderReceipt(mission) {
   return `${mission.id}: gates=[${gates}] acceptance=[${acceptance}]. Human app check required.`;
 }
 
-module.exports = { createController, parseReview, workerPrompt, reviewPrompt, compactReceipt };
+module.exports = { createController, planGoal, parseReview, workerPrompt, reviewPrompt, compactReceipt };

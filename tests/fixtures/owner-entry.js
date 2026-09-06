@@ -36,6 +36,7 @@ if (kind === "daemon") {
   journal.append = (...values) => {
     const event = append(...values);
     if (config.stage === "admitted" && event.type === "owner.request.admitted") barrier("admitted");
+    if (config.stage === "prepare-partial" && event.type === "mission.created" && event.preparationRequestId) barrier("prepare-partial");
     return event;
   };
   const linux = require("../../src/adapters/linux-ownership"), create = linux.createLinuxOwnership;

@@ -1,6 +1,10 @@
 "use strict";
 
 const { spawnSync } = require("node:child_process");
+for (const file of ["tests/goal-preparation.test.js", "tests/goal-consumers-proof.test.js"]) {
+  const result = spawnSync(process.execPath, [file], { stdio: "inherit" });
+  if (result.status !== 0 || result.signal) process.exit(result.status || 1);
+}
 const hostSandboxHold = process.platform === "darwin" && process.env.FACTORYV2_TEST_NO_HOST_SANDBOX === "1";
 const sandboxProofs = new Set(["tests/worker-isolation-proof.test.js", "tests/real-adapters-proof.test.js", "tests/channels-daemon-proof.test.js"]);
 function held(file) {
