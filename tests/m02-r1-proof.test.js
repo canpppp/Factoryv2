@@ -68,6 +68,12 @@ async function main() {
   const denied = await invoke(reduced);
   assert.equal(denied.observed.toolRead.ok, baseline);
   assert.equal(option(denied.observed.argv, "--tools"), baseline ? "Read" : "");
+  if (baseline) {
+    const stale = await invoke(adapter.resumeThread(first.receipt.sessionId, { ...options, disallowedTools: ["Read"], resumeProfileDigest: first.receipt.metadata.profileDigest }));
+    assert.equal(option(stale.observed.argv, "--resume"), first.receipt.sessionId);
+    assert.equal(stale.observed.toolRead.ok, true);
+    assert.equal(stale.receipt.metadata.profileDigest, first.receipt.metadata.profileDigest);
+  }
   if (!baseline) {
     assert.equal(option(denied.observed.argv, "--allowedTools"), null);
     assert.ok(option(denied.observed.argv, "--disallowedTools").split(",").includes("Read"));
