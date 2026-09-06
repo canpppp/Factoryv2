@@ -110,7 +110,7 @@ async function main() {
   assert.strictEqual(unreadable.status("unreadable").state, "unavailable");
   assert.match(unreadable.status("unreadable").unavailableReason, /marker file/);
 
-  const apiSocket = path.join("/private/tmp", `factoryv2-channel-api-${process.pid}.sock`);
+  const apiSocket = path.join(os.tmpdir(), `factoryv2-channel-api-${process.pid}.sock`);
   const api = createChannelApi({ root, registry, socketPath: apiSocket });
   let socketStarted = false;
   try {
