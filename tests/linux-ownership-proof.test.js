@@ -33,14 +33,14 @@ async function main() {
   }
   console.log("Linux ownership backend:", spawnSync("/usr/bin/bwrap", ["--version"], { encoding: "utf8" }).stdout.trim());
   const evidence = [];
-  for (const mode of ["cancel", "timeout", "overflow", "exit", "owner-loss", "client-loss", "channel-cancel", "cleanup-unknown", "race", "info-malformed"]) {
+  for (const mode of ["cancel", "timeout", "overflow", "exit", "owner-loss", "client-loss", "channel-cancel", "cleanup-unknown", "race", "info-malformed", "observation-held"]) {
     const dir = H.tmp("factory-linux-owned-");
     const token = randomUUID(), expiry = Date.now() + 18000;
     const provider = fixtureProfile(path.join(__dirname, "fixtures/linux-ownership-worker.js"), { readRoots: [dir], writeRoots: [dir], limits: { killGraceMs: 100, cleanupMs: 2000 } });
     const configPath = path.join(dir, "config.json"), report = path.join(dir, "watchdog.json");
     const channel = ["client-loss", "channel-cancel", "cleanup-unknown"].includes(mode);
     const root = H.tmp("factory-linux-api-");
-    const config = { dir, root, expiry, provider, mode, timeoutMs: ["timeout", "race"].includes(mode) ? 1800 : 8000, limits: { lineBytes: 1024, killGraceMs: 100, cleanupMs: 2000 } };
+    const config = { dir, root, expiry, provider, mode, timeoutMs: mode === "info-malformed" ? 1000 : ["timeout", "race"].includes(mode) ? 1800 : 8000, limits: { lineBytes: 1024, killGraceMs: 100, cleanupMs: 2000 } };
     fs.writeFileSync(configPath, JSON.stringify(config));
     const watchdog = start("linux-ownership-watchdog.js", [token, String(expiry - 2000), report]);
     await until(() => watchdog.messages.length);
@@ -112,11 +112,12 @@ async function main() {
         await until(() => inventory(token, [...namespaces]).filter((item) => namespaces.has(item.namespace) && item.state !== "Z").length === 0);
         assert.equal(owner.messages.filter((item) => item.type === "settled").length, 0, "owner loss is not successful job completion");
       } else {
-        if (["cancel", "channel-cancel", "cleanup-unknown", "race"].includes(mode)) { owner.child.send("cancel"); owner.child.send("cancel"); }
+        if (["cancel", "channel-cancel", "cleanup-unknown", "race", "observation-held"].includes(mode)) { owner.child.send("cancel"); owner.child.send("cancel"); }
         if (mode === "overflow") await until(() => owner.messages.some((item) => item.type === "settled"));
         const settlement = await until(() => owner.messages.find((item) => item.type === "settled"));
         result = settlement.result;
         attempt = settlement.attempt;
+        if (mode === "observation-held") assert.ok(settlement.afterCancelMs >= 200, "settlement must wait for namespace termination observation, not just monitor exit");
         atSettlement = inventory(token, [...namespaces]).filter((item) => namespaces.has(item.namespace) && item.state !== "Z");
         assert.deepEqual(atSettlement, [], "settlement cannot precede active namespace cleanup");
         if (!channel) {
@@ -127,7 +128,7 @@ async function main() {
           assert.equal(settlement.namespaces.length, 1, "owner observed containment before settlement");
           assert.deepEqual(settlement.atSettlement, [], "wrapper promise settlement has no active owned namespace member");
           if (mode === "race") assert.ok(["CANCELLED", "TIMEOUT", "OUTPUT_LIMIT"].includes(result.cause));
-          else assert.equal(result.cause, { cancel: "CANCELLED", timeout: "TIMEOUT", overflow: "OUTPUT_LIMIT", exit: "EXIT" }[mode]);
+          else assert.equal(result.cause, { cancel: "CANCELLED", timeout: "TIMEOUT", overflow: "OUTPUT_LIMIT", exit: "EXIT", "observation-held": "CANCELLED" }[mode]);
         } else if (mode === "client-loss") assert.equal(result.ok, true, JSON.stringify(result));
         else {
           assert.equal(attempt.code, mode === "cleanup-unknown" ? "CLEANUP_FAILED" : "CANCELLED");
