@@ -44,6 +44,25 @@ async function main() {
   assert.strictEqual(restarted.result("invoice-audit").deterministic, true);
   assert.strictEqual(restarted.result("invoice-audit").mismatches.length, 1);
 
+  const primed = restarted.send("kaylas-store", "Use the store SOP to answer.", {
+    jobId: "primed-job",
+    jobPackId: "kaylas-store:ops-pack",
+    jobPackRevision: "7",
+    primingRefs: ["capsule"],
+    contextRefs: ["skill:returns"],
+    evidenceRequired: ["capsule"]
+  });
+  assert.strictEqual(primed.envelope.jobPackId, "kaylas-store:ops-pack");
+  assert.deepStrictEqual(primed.envelope.primingRefs, ["capsule"]);
+  assert.ok(primed.envelope.payloadDigest);
+  await restarted.runNext();
+  const primedResult = restarted.result("kaylas-store", "primed-job");
+  assert.strictEqual(primedResult.verified, true);
+  const contextEvent = journal.load(root).events.find((event) => event.type === "channel.context.resolved" && event.jobId === "primed-job");
+  assert.strictEqual(contextEvent.manifest.jobPackId, "kaylas-store:ops-pack");
+  assert.ok(contextEvent.manifest.sha256);
+  assert.ok(contextEvent.manifest.refs.some((ref) => ref.ref === "capsule" && ref.kind === "sop" && ref.bytes > 0));
+
   const tools = createChannelTools(restarted);
   const queued = await tools["channel.send"]({ channelId: "facebook-product-launches", prompt: "Pause and report campaign state." });
   assert.ok(queued.id);
@@ -97,7 +116,46 @@ async function main() {
   assert.ok(NOTIFICATION_TYPES.has(notification.type));
   assert.strictEqual(notificationFor({ type: "channel.job.finished" }), null);
 
+  await proveWorkerReceivesResolvedContext(fixtureConfig.definitionsPath);
+
   console.log("Channels and daemon restart proof passed");
+}
+
+async function proveWorkerReceivesResolvedContext(definitionsPath) {
+  const root = H.tmp("factoryv2-priming-");
+  let capturedPrompt = "";
+  const adapter = {
+    startThread: () => ({
+      run: async (prompt, hooks) => {
+        capturedPrompt = prompt;
+        hooks.onThreadId("priming-session");
+        const hashes = [...prompt.matchAll(/"sha256":"([0-9a-f]{64})"/g)].map((match) => match[1]);
+        const manifestSha = hashes.at(-1);
+        return {
+          engine: "claude",
+          sessionId: "priming-session",
+          finalResponse: JSON.stringify({
+            done: true,
+            channelId: "kaylas-store",
+            jobId: "priming-content-job",
+            summary: "context received",
+            evidence: ["capsule"],
+            contextManifestSha256: manifestSha
+          }),
+          metadata: {}
+        };
+      }
+    }),
+    resumeThread: () => { throw new Error("unexpected resume"); },
+    cancelThread: () => false
+  };
+  const registry = createChannelRegistry({ root, definitionsPath, adapterFactory: () => adapter });
+  registry.ensureDefaults();
+  registry.send("kaylas-store", "prove priming", { jobId: "priming-content-job", primingRefs: ["capsule"], evidenceRequired: ["capsule"] });
+  await registry.runNext();
+  assert.match(capturedPrompt, /REQUIRED CONTEXT CONTENT:/);
+  assert.match(capturedPrompt, /Test capsule for kaylas-store/);
+  assert.strictEqual(registry.result("kaylas-store", "priming-content-job").verified, true);
 }
 
 main().catch((error) => {

@@ -12,6 +12,8 @@ const modelRouter = require("./model-router");
 const tokenGovernor = require("./token-governor");
 const deterministic = require("./deterministic");
 const { compileTask } = require("./task-compiler");
+const { resolveContext, digest } = require("./context-resolver");
+const { verifyWorkerResult } = require("./result-verifier");
 
 const RECOVERABLE = new Set(["PROVIDER_QUOTA", "TIMEOUT", "AUTH_REQUIRED", "AGENT_FAILED"]);
 const DEFINITION_FIELDS = ["name", "aliases", "cwd", "engine", "modelPolicy", "allowedTools", "readWriteProfile", "writeAuthority", "projectIdentity", "capsule", "capsulePath", "definitionVersion", "identityKey", "unavailableReason"];
@@ -75,8 +77,12 @@ function createChannelRegistry({ root, adapterFactory = (config) => createAdapte
     return channel;
   }
 
-  function result(channelId) {
-    return status(channelId).latestResult;
+  function result(channelId, jobId = null) {
+    const channel = status(channelId);
+    if (!jobId) return channel.latestResult;
+    const found = findJobResult(root, channel.id, jobId) || { ok: false, code: "RESULT_NOT_FOUND", jobId };
+    journal.append(root, { type: "channel.result.retrieved", channelId: channel.id, jobId, ok: !!found.ok, verified: !!found.verified });
+    return found;
   }
 
   function send(channelId, prompt, options = {}) {
@@ -85,10 +91,14 @@ function createChannelRegistry({ root, adapterFactory = (config) => createAdapte
     const envelope = compileTask(channel, { ...options, prompt });
     const check = validateChannel(channel, envelope);
     if (!check.ok) throw channelError(check.reason, check.code);
-    const jobId = options.jobId || randomUUID();
+    const jobId = options.jobId || options.idempotencyKey || randomUUID();
     const duplicate = findJob(channel, jobId) || findJournalJob(root, channelId, jobId);
-    if (duplicate) return duplicate;
-    const job = { id: jobId, prompt: envelope.objective, envelope, queuedAt: new Date().toISOString(), kind: options.kind || channel.modelPolicy?.kind || "implementation", deterministic: options.deterministic || null };
+    if (duplicate) {
+      if (duplicate.envelope?.payloadDigest !== envelope.payloadDigest) throw channelError("idempotency key reused with a different canonical payload", "IDEMPOTENCY_PAYLOAD_MISMATCH");
+      return duplicate;
+    }
+    const job = { id: jobId, requestId: envelope.requestId, prompt: envelope.objective, envelope, queuedAt: new Date().toISOString(), kind: options.kind || channel.modelPolicy?.kind || "implementation", deterministic: options.deterministic || null, attempt: 1, contextManifest: null };
+    journal.append(root, { type: "channel.job.admitted", channelId, jobId, requestId: envelope.requestId, payloadDigest: envelope.payloadDigest });
     journal.append(root, { type: "channel.job.queued", channelId, job });
     return job;
   }
@@ -147,10 +157,20 @@ function createChannelRegistry({ root, adapterFactory = (config) => createAdapte
         journal.append(root, { type: "channel.job.failed", channelId: channel.id, jobId: job.id, result, error: check.reason });
         return { progressed: true, channelId: channel.id, result };
       }
+      const context = resolveContext(channel, job.envelope || {});
+      if (!context.ok) {
+        const result = { ok: false, jobId: job.id, error: context.reason, code: context.code, ref: context.ref };
+        persistSession(root, channel.id, job, result, null);
+        journal.append(root, { type: "channel.context.failed", channelId: channel.id, jobId: job.id, code: context.code, reason: context.reason, ref: context.ref });
+        journal.append(root, { type: "channel.job.failed", channelId: channel.id, jobId: job.id, result, error: context.reason });
+        return { progressed: true, channelId: channel.id, result };
+      }
+      job.contextManifest = context.manifest;
+      journal.append(root, { type: "channel.context.resolved", channelId: channel.id, jobId: job.id, manifest: context.manifest });
       if (!channel.currentJob) journal.append(root, { type: "channel.job.started", channelId: channel.id, job });
       if (deterministic.canRun(job)) {
-        const result = { ...deterministic.run(job), jobId: job.id, deterministic: true, finishedAt: new Date().toISOString() };
-        persistSession(root, channel.id, job, result);
+        const result = { ...deterministic.run(job), jobId: job.id, deterministic: true, verified: true, contextManifestSha256: context.manifest.sha256, finishedAt: new Date().toISOString() };
+        persistSession(root, channel.id, job, result, context.manifest);
         journal.append(root, { type: "channel.job.finished", channelId: channel.id, jobId: job.id, result });
         return { progressed: true, channelId: channel.id, result };
       }
@@ -166,7 +186,7 @@ function createChannelRegistry({ root, adapterFactory = (config) => createAdapte
       };
       const sessionId = channel.sessionId || null;
       const agentThread = sessionId ? adapter.resumeThread(sessionId, options) : adapter.startThread(options);
-      const prompt = channelPrompt(channel, job);
+      const prompt = channelPrompt(channel, job, context);
       const runner = { adapter, sessionId, action: null };
       active.set(channel.id, runner);
       try {
@@ -183,17 +203,33 @@ function createChannelRegistry({ root, adapterFactory = (config) => createAdapte
           error.code = "MALFORMED_RESPONSE";
           throw error;
         }
+        const receiptEvent = journal.append(root, {
+          type: "agent.receipt",
+          channelId: channel.id,
+          jobId: job.id,
+          sessionId: receipt.sessionId || receipt.threadId || runner.sessionId || null,
+          engine: receipt.engine || channel.engine,
+          origin: receipt.origin || "adapter",
+          finalResponseDigest: digest(receipt.finalResponse)
+        });
         tokenGovernor.record(root, {
           scope: `channel:${channel.id}:${job.id}`,
           prompt,
           receipt,
           modelPolicy: { ...policy, reusedSession: !!sessionId },
           capsule: channel.capsule,
-          retrievedSources: JSON.stringify(job.envelope?.contextRefs || []),
+          retrievedSources: JSON.stringify(context.manifest.refs.map((ref) => ({ ref: ref.ref, sha256: ref.sha256, bytes: ref.bytes }))),
           selectedSkills: ["channel-operator", "task-compiler", "repo-capsule", "token-governor"]
         });
-        const result = { ok: true, jobId: job.id, response: receipt.finalResponse, receipt: compactReceipt(receipt), finishedAt: new Date().toISOString() };
-        persistSession(root, channel.id, job, result);
+        const verification = verifyWorkerResult({ channelId: channel.id, job, receipt, contextManifest: context.manifest });
+        if (!verification.ok) {
+          const result = { ok: false, jobId: job.id, code: verification.code, error: verification.reason, verification, receipt: compactReceipt(receipt), finishedAt: new Date().toISOString() };
+          persistSession(root, channel.id, job, result, context.manifest);
+          journal.append(root, { type: "channel.job.unverified", channelId: channel.id, jobId: job.id, result, receiptEventAt: receiptEvent.at });
+          return { progressed: true, channelId: channel.id, result };
+        }
+        const result = { ok: true, jobId: job.id, verified: true, summary: verification.summary, evidence: verification.evidence, structured: verification.structured, receipt: compactReceipt(receipt), finishedAt: new Date().toISOString() };
+        persistSession(root, channel.id, job, result, context.manifest);
         journal.append(root, { type: "channel.job.finished", channelId: channel.id, jobId: job.id, result });
         return { progressed: true, channelId: channel.id, result };
       } catch (error) {
@@ -249,8 +285,22 @@ function normalizeDefinition(definition, configDir = path.join(__dirname, "../co
   return base;
 }
 
-function channelPrompt(channel, job) {
-  return [`CHANNEL ${channel.id}`, `PROJECT CAPSULE:\n${channel.capsule}`, `TASK ENVELOPE:\n${JSON.stringify(job.envelope || { objective: job.prompt })}`, `JOB ${job.id}`, "Return a concise operator result with evidence and any required decision."].join("\n");
+function channelPrompt(channel, job, context = null) {
+  const manifest = context?.manifest || job.contextManifest || null;
+  const resolved = context?.resolved || [];
+  const contextBlock = resolved.length
+    ? resolved.map((item) => [`REF ${item.ref}`, `KIND ${item.kind}`, `SHA256 ${item.sha256}`, `BYTES ${item.bytes}`, item.content].join("\n")).join("\n---\n")
+    : "NO RESOLVED CONTEXT";
+  return [
+    `CHANNEL ${channel.id}`,
+    `JOB ${job.id}`,
+    `PROJECT CAPSULE:\n${channel.capsule}`,
+    `TASK ENVELOPE:\n${JSON.stringify(job.envelope || { objective: job.prompt })}`,
+    `RESOLVED CONTEXT MANIFEST:\n${JSON.stringify(manifest || null)}`,
+    `REQUIRED CONTEXT CONTENT:\n${contextBlock}`,
+    "Return only structured JSON: {\"done\":true,\"channelId\":\"...\",\"jobId\":\"...\",\"summary\":\"...\",\"evidence\":[\"...\"],\"contextManifestSha256\":\"...\"}.",
+    "Do not claim completion unless the objective and required evidence are satisfied."
+  ].join("\n");
 }
 
 function validateChannel(channel, envelope = {}) {
@@ -307,6 +357,17 @@ function findJournalJob(root, channelId, jobId) {
   return null;
 }
 
+function findJobResult(root, channelId, jobId) {
+  const events = journal.load(root).events;
+  for (let index = events.length - 1; index >= 0; index--) {
+    const event = events[index];
+    if (event.channelId === channelId && event.jobId === jobId && ["channel.job.finished", "channel.job.failed", "channel.job.cancelled", "channel.job.unverified"].includes(event.type)) {
+      return event.result || { ok: false, jobId, error: event.error || event.type };
+    }
+  }
+  return null;
+}
+
 function channelError(message, code) {
   const error = new Error(message);
   error.code = code || "CHANNEL_REFUSED";
@@ -330,11 +391,15 @@ function compactReceipt(receipt) {
   return { engine: receipt.engine, sessionId: receipt.sessionId || receipt.threadId, metadata: receipt.metadata || {} };
 }
 
-function persistSession(root, channelId, job, result) {
+function persistSession(root, channelId, job, result, contextManifest = null) {
   const dir = path.join(journal.paths(root).sessions, channelId);
   fs.mkdirSync(dir, { recursive: true });
-  const file = path.join(dir, `${job.id}.json`);
-  fs.writeFileSync(file, JSON.stringify({ channelId, job, result }, null, 2));
+  const file = path.join(dir, `${safeSessionFileName(job.id)}.json`);
+  fs.writeFileSync(file, JSON.stringify({ channelId, job, contextManifest, result }, null, 2));
+}
+
+function safeSessionFileName(jobId) {
+  return createHash("sha256").update(String(jobId)).digest("hex");
 }
 
 function scheduleBackoff(root, provider, reason) {

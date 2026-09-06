@@ -9,14 +9,14 @@ function productionAudit(root) {
   const cli = fs.readFileSync(path.join(sourceRoot, "bin/factoryv2.js"), "utf8");
   const state = root ? journal.load(root) : { events: [], channels: new Map() };
   const events = state.events || [];
-  const exercised = new Set(events.filter((event) => event.type === "channel.job.finished").map((event) => event.channelId));
-  const liveAgent = events.some((event) => event.type === "agent.receipt" || event.type === "token.usage");
-  const daemonRestart = new Set(events.filter((event) => event.type === "daemon.started").map((event) => event.pid)).size >= 2;
-  const resumed = events.some((event) => event.type === "token.usage" && event.reusedSession);
-  const dispatch = events.some((event) => event.type === "channel.job.queued") && events.some((event) => event.type === "channel.job.finished");
-  const tokenReceipt = events.some((event) => event.type === "token.usage" && Object.hasOwn(event, "promptContextEstimate") && Object.hasOwn(event, "cacheReadTokens"));
-  const quota = events.some((event) => event.type === "provider.backoff.scheduled");
-  const deterministic = events.some((event) => event.type === "channel.job.finished" && event.result?.deterministic);
+  const exercised = new Set(events.filter((event) => event.type === "channel.job.finished" && event.result?.verified).map((event) => event.channelId));
+  const liveAgent = events.some((event) => liveReceipt(events, event));
+  const daemonRestart = events.some((event) => controllerSurvival(events, event));
+  const resumed = events.some((event) => resumedSession(events, event));
+  const dispatch = events.some((event) => dispatchRetrieved(events, event));
+  const primedContext = events.some((event) => contextResolved(event));
+  const tokenReceipt = events.some((event) => tokenEvidence(event));
+  const quota = events.some((event) => quotaContinuation(events, event));
 
   return [
     item("A", "normal run uses a real adapter", !cli.includes("fakeAdapter") ? (liveAgent ? "live-proved" : "implemented") : "failed"),
@@ -24,7 +24,7 @@ function productionAudit(root) {
     item("C", "Claude channel persists and resumes", resumed ? "live-proved" : "implemented"),
     item("D", "six channels exist; three exercised", state.channels?.size === 6 && exercised.size >= 3 ? "live-proved" : "implemented"),
     item("E", "JARVIS dispatch and result retrieval", dispatch ? "live-proved" : "implemented"),
-    item("F", "compact goal and selective skills", fs.existsSync(path.join(sourceRoot, "skills/index.json")) ? "protocol-proved" : "failed"),
+    item("F", "compact goal and selective skills", primedContext ? "live-proved" : (fs.existsSync(path.join(sourceRoot, "skills/index.json")) ? "protocol-proved" : "failed")),
     item("G", "token governor evidence", tokenReceipt ? "live-proved" : "implemented"),
     item("H", "quota backoff and deterministic continuation", quota && deterministic ? "live-proved" : "implemented"),
     item("I", "concise operator-only result", "implemented")
@@ -32,6 +32,59 @@ function productionAudit(root) {
 }
 
 function item(id, title, status) { return { id, title, status }; }
+
+function liveReceipt(events, event) {
+  if (event.type !== "agent.receipt" || event.origin === "fixture") return false;
+  return !!(event.channelId && event.jobId && event.sessionId && event.engine)
+    && events.some((candidate) => candidate.type === "channel.job.finished" && candidate.channelId === event.channelId && candidate.jobId === event.jobId && candidate.result?.verified);
+}
+
+function controllerSurvival(events, event) {
+  if (event.type !== "controller.stopped" || !event.scenarioId) return false;
+  return events.some((candidate) => candidate.type === "channel.job.finished" && candidate.scenarioId === event.scenarioId && candidate.result?.verified);
+}
+
+function resumedSession(events, event) {
+  if (event.type !== "token.usage" || !event.reusedSession || event.origin === "fixture") return false;
+  const [, channelId, jobId] = String(event.scope || "").split(":");
+  return !!(channelId && jobId) && events.some((candidate) => candidate.type === "agent.receipt" && candidate.channelId === channelId && candidate.jobId === jobId && candidate.sessionId);
+}
+
+function dispatchRetrieved(events, event) {
+  if (event.type !== "channel.result.retrieved" || !event.channelId || !event.jobId || !event.ok || !event.verified) return false;
+  const retrievedAt = Date.parse(event.at || "");
+  return events.some((candidate) => candidate.type === "channel.job.queued" && candidate.channelId === event.channelId && candidate.job?.id === event.jobId)
+    && events.some((candidate) => {
+      const finishedAt = Date.parse(candidate.at || "");
+      return candidate.type === "channel.job.finished"
+        && candidate.channelId === event.channelId
+        && candidate.jobId === event.jobId
+        && candidate.result?.verified
+        && Number.isFinite(finishedAt)
+        && Number.isFinite(retrievedAt)
+        && finishedAt <= retrievedAt;
+    });
+}
+
+function contextResolved(event) {
+  return event.type === "channel.context.resolved"
+    && event.manifest?.sha256
+    && Array.isArray(event.manifest.refs)
+    && event.manifest.refs.some((ref) => ref.kind !== "fixture" && ref.sha256 && Number.isInteger(ref.bytes));
+}
+
+function tokenEvidence(event) {
+  return event.type === "token.usage"
+    && event.origin !== "fixture"
+    && /^channel:[^:]+:[^:]+$/.test(String(event.scope || ""))
+    && Object.hasOwn(event, "promptContextEstimate")
+    && Object.hasOwn(event, "cacheReadTokens");
+}
+
+function quotaContinuation(events, event) {
+  if (event.type !== "provider.backoff.scheduled" || !event.scenarioId) return false;
+  return events.some((candidate) => candidate.type === "deterministic.continuation" && candidate.scenarioId === event.scenarioId && candidate.channelId && candidate.jobId);
+}
 
 function renderProductionAudit(root) {
   return productionAudit(root).map((entry) => `${entry.id}. ${entry.status.toUpperCase()} ${entry.title}`).join("\n");

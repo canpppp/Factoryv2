@@ -24,9 +24,9 @@ async function main() {
     assert.strictEqual(failing.status("kaylas-store").lastFailure.recoverable, true);
 
     journal.append(root, { type: "provider.backoff.cleared", provider: "claude" });
-    const restarted = createChannelRegistry({ root, definitionsPath: fixture.definitionsPath, adapterFactory: () => adapter(async () => {
+    const restarted = createChannelRegistry({ root, definitionsPath: fixture.definitionsPath, adapterFactory: () => adapter(async (prompt) => {
       calls += 1;
-      return receipt("recovered");
+      return receiptFromPrompt(prompt);
     }) });
     const recovered = await restarted.runNext();
     assert.strictEqual(recovered.result.ok, true);
@@ -40,7 +40,7 @@ async function main() {
   let started = 0;
   const stale = createChannelRegistry({ root: staleRoot, definitionsPath: staleFixture.definitionsPath, adapterFactory: () => ({
     engine: "claude",
-    startThread: () => ({ run: async (_prompt, hooks) => { started += 1; hooks.onThreadId("new-session"); return receipt("fresh"); } }),
+    startThread: () => ({ run: async (prompt, hooks) => { started += 1; hooks.onThreadId("new-session"); return receiptFromPrompt(prompt); } }),
     resumeThread: () => ({ run: async () => { resumed += 1; const error = new Error("stale"); error.code = "THREAD_NOT_FOUND"; throw error; } }),
     cancelThread: () => false
   }) });
@@ -75,6 +75,21 @@ function adapter(run) {
 
 function receipt(finalResponse) {
   return { engine: "claude", sessionId: "session", finalResponse, metadata: { model: "test", inputTokens: 10, outputTokens: 2 } };
+}
+
+function receiptFromPrompt(prompt) {
+  const channelId = prompt.match(/^CHANNEL ([^\n]+)/m)?.[1];
+  const jobId = prompt.match(/^JOB ([^\n]+)/m)?.[1];
+  const hashes = [...prompt.matchAll(/"sha256":"([0-9a-f]{64})"/g)].map((match) => match[1]);
+  const manifestSha = hashes.at(-1);
+  return receipt(JSON.stringify({
+    done: true,
+    channelId,
+    jobId,
+    summary: "recovered",
+    evidence: [],
+    contextManifestSha256: manifestSha
+  }));
 }
 
 main().catch((error) => {

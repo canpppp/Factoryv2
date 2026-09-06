@@ -5,10 +5,18 @@ function createChannelTools(registry) {
     "channel.list": async () => registry.list().map(summary),
     "channel.send": async (params) => registry.send(params.channelId, params.objective || params.prompt, {
       jobId: params.jobId,
+      requestId: params.requestId,
+      idempotencyKey: params.idempotencyKey,
+      jobPackId: params.jobPackId,
+      jobPackRevision: params.jobPackRevision,
       kind: params.kind,
+      constraints: params.constraints,
+      primingRefs: params.primingRefs,
+      requiredRefs: params.requiredRefs,
       contextRefs: params.contextRefs,
       evidenceRequired: params.evidenceRequired,
       readWriteBoundary: params.readWriteBoundary,
+      effectBoundary: params.effectBoundary,
       doneCondition: params.doneCondition,
       tokenBudget: params.tokenBudget,
       timeoutMs: params.timeoutMs,
@@ -16,7 +24,7 @@ function createChannelTools(registry) {
       requestedTools: params.requestedTools
     }),
     "channel.status": async ({ channelId }) => summary(registry.status(channelId)),
-    "channel.result": async ({ channelId }) => registry.result(channelId),
+    "channel.result": async ({ channelId, jobId }) => registry.result(channelId, jobId),
     "channel.cancel": async ({ channelId }) => controlReceipt(registry, channelId, "cancel"),
     "channel.resume": async ({ channelId }) => controlReceipt(registry, channelId, "resume")
   };
