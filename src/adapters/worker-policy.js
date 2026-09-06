@@ -75,6 +75,7 @@ function compileWorkerPolicy(engine, config, options) {
   if (!synthetic && runtimeReadRoots.length) fail("custom runtime exceptions require adapter validation", "ISOLATION_UNSUPPORTED");
   const profile = {
     version: 2, channelId: options.channelId || null, engine, executable, executableSha256, entrypoint, entrypointSha256, synthetic, cwd, tools, disallowedTools, readRoots, writeRoots,
+    ...(options.controllerBinding ? { controllerBinding: JSON.parse(JSON.stringify(options.controllerBinding)) } : {}),
     stateRoot, runtimeReadRoots, sandbox, timeoutMs, limits,
     model: options.model || config.model || null, maxTurns: options.maxTurns || config.maxTurns || 12,
     auth: { mode: spec.auth.mode, source: synthetic ? null : spec.auth.tokenEnv },

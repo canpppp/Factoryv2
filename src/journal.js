@@ -71,7 +71,7 @@ function materialize(events) {
   for (const e of events) {
     if (e.type === "goal.enqueued") goals.set(e.goalId, { id: e.goalId, ...e.goal, state: "queued" });
     if (e.type === "goal.state") Object.assign(goals.get(e.goalId) || {}, { state: e.to, updatedAt: e.at });
-    if (e.type === "mission.created") missions.set(e.missionId, { id: e.missionId, ...e.mission, state: "queued" });
+    if (e.type === "mission.created") missions.set(e.missionId, { ...e.mission, id: e.missionId, roleSessions: {}, state: "queued" });
     if (e.type === "mission.state") Object.assign(missions.get(e.missionId) || {}, {
       state: e.to,
       blocker: e.blocker || null,
@@ -81,6 +81,13 @@ function materialize(events) {
       const m = missions.get(e.missionId);
       const allowed = ["workerThreadId", "reviewerThreadId", "worktree", "attempts", "repairRounds", "lastFindings", "lastGateResults", "commit", "integration", "candidate", "acceptance", "release", "replacements"];
       if (m && allowed.includes(e.field)) m[e.field] = e.value;
+    }
+    if (e.type === "mission.role.session" && ["worker", "reviewer"].includes(e.role)) {
+      const mission = missions.get(e.missionId);
+      if (mission) {
+        mission.roleSessions[e.role] = e.record;
+        mission[`${e.role}ThreadId`] = e.record.sessionId;
+      }
     }
     if (e.type === "receipt") receipts.push(e);
     if (e.type === "channel.registered") channels.set(e.channel.id, { ...e.channel, queue: [], currentJob: null, latestResult: null, lastSuccessfulJob: null, lastFailure: null, heartbeat: null, state: e.channel.state || "idle" });

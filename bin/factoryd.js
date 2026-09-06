@@ -10,7 +10,7 @@ const value = (name, fallback) => {
   return index >= 0 ? argv[index + 1] : fallback;
 };
 const root = path.resolve(value("root", process.env.FACTORYV2_HOME || ".factoryv2"));
-const daemon = createDaemon({ root, engine: value("engine", process.env.FACTORYV2_ENGINE || "claude"), pollMs: Number(value("poll-ms", "5000")) });
+const daemon = createDaemon({ root, engine: value("engine", process.env.FACTORYV2_ENGINE || "claude"), pollMs: Number(value("poll-ms", "5000")), rolePoliciesPath: value("role-policies", undefined) });
 process.on("SIGTERM", () => daemon.stop());
 process.on("SIGINT", () => daemon.stop());
 

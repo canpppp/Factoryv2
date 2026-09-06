@@ -10,7 +10,7 @@ const { createChannelApi } = require("./channel-api");
 
 const NOTIFICATION_TYPES = new Set(["READY_FOR_HUMAN_CHECK", "HUMAN_DECISION_REQUIRED", "BLOCKED_EXTERNAL", "SHIPPED"]);
 
-function createDaemon({ root, engine = process.env.FACTORYV2_ENGINE || "claude", pollMs = 5000, adapterFactory, notifier = defaultNotifier, channelDefinitionsPath } = {}) {
+function createDaemon({ root, engine = process.env.FACTORYV2_ENGINE || "claude", pollMs = 5000, adapterFactory, notifier = defaultNotifier, channelDefinitionsPath, rolePolicies, rolePoliciesPath } = {}) {
   if (!root) throw new Error("factoryd needs root");
   const makeAdapter = adapterFactory || ((config) => createAdapter(config));
   const channels = createChannelRegistry({ root, adapterFactory: makeAdapter, definitionsPath: channelDefinitionsPath });
@@ -26,7 +26,7 @@ function createDaemon({ root, engine = process.env.FACTORYV2_ENGINE || "claude",
     const controllerWork = [...state.goals.values()].some((goal) => goal.state === "queued")
       || [...state.missions.values()].some((mission) => ["queued", "building", "repair", "verifying", "reviewing", "integrating", "candidate", "accepting"].includes(mission.state));
     if (controllerWork && (!providerBackoff || Date.parse(providerBackoff.until) <= Date.now())) {
-      controllerResult = await createController({ root, adapter: makeAdapter({ engine }) }).run({ maxSteps: 10 });
+      controllerResult = await createController({ root, adapterFactory: makeAdapter, rolePolicies, rolePoliciesPath }).run({ maxSteps: 10 });
       if (controllerResult.backoff) scheduleDaemonBackoff(root, engine, controllerResult.summary);
     }
     const channelWork = [...state.channels.values()].some((channel) => channel.currentJob || channel.queue.length);

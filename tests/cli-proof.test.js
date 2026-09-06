@@ -3,7 +3,7 @@
 const assert = require("node:assert");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
-const { createController } = require("../src/controller");
+const { createController } = require("./fixtures/controller-options");
 const { fakeAdapter } = require("../src/fake-agent");
 const H = require("./helpers");
 

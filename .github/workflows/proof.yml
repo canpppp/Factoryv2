@@ -12,6 +12,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
@@ -21,4 +22,6 @@ jobs:
         run: node tests/m02-r1-proof.test.js --baseline
       - name: Focused R1 and R2 consumer regressions
         run: node tests/m02-r1-proof.test.js
+      - name: Controller role policy and durable session consumers
+        run: node tests/controller-policy-proof.test.js
       - run: npm test

@@ -7,12 +7,11 @@ const { createController } = require("../src/controller");
 const journal = require("../src/journal");
 const report = require("../src/report");
 const audit = require("../src/audit");
-const { createAdapter } = require("../src/adapters");
 const { createChannelRegistry } = require("../src/channels");
 const { install: installLaunchd } = require("../src/launchd");
 
 const argv = process.argv.slice(2);
-const FLAGS_WITH_VALUES = new Set(["--root", "--repo", "--max-steps", "--engine"]);
+const FLAGS_WITH_VALUES = new Set(["--root", "--repo", "--max-steps", "--engine", "--role-policies"]);
 function positionals() {
   const out = [];
   for (let i = 0; i < argv.length; i++) {
@@ -47,15 +46,16 @@ async function main() {
     if (!text) die("usage: factoryv2 goal <goal text> [--repo <path>]");
     const repo = flag("repo", null);
     if (!repo) die("--repo is required for F0/F1");
-    const controller = createController({ root, adapter: createAdapter({ engine: flag("engine", process.env.FACTORYV2_ENGINE || "claude") }) });
+    const controller = createController({ root, rolePoliciesPath: flag("role-policies") });
     const goal = controller.enqueueGoal({ goal: text, repo: path.resolve(repo) });
     console.log(`queued ${goal.id}`);
     return;
   }
   if (cmd === "run") {
-    const controller = createController({ root, adapter: createAdapter({ engine: flag("engine", process.env.FACTORYV2_ENGINE || "claude") }) });
+    const controller = createController({ root, rolePoliciesPath: flag("role-policies") });
     const result = await controller.run({ maxSteps: Number(flag("max-steps", 100)) });
-    console.log(result.summary);
+    console.log(result.code ? `${result.code}: ${result.summary}` : result.summary);
+    if (!result.ok) process.exitCode = 1;
     return;
   }
   if (cmd === "status") {

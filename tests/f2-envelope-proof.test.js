@@ -1,7 +1,7 @@
 "use strict";
 
 const assert = require("node:assert");
-const { createController } = require("../src/controller");
+const { createController } = require("./fixtures/controller-options");
 const { fakeAdapter } = require("../src/fake-agent");
 const journal = require("../src/journal");
 const envelope = require("../src/envelope");

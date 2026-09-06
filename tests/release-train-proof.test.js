@@ -2,7 +2,7 @@
 
 const assert = require("node:assert");
 const fs = require("node:fs");
-const { createController } = require("../src/controller");
+const { createController } = require("./fixtures/controller-options");
 const { fakeAdapter } = require("../src/fake-agent");
 const journal = require("../src/journal");
 const releaseTrain = require("../src/release-train");
