@@ -38,6 +38,8 @@ function runJsonlProcess({ command, args = [], cwd, input, timeoutMs = 300000, e
     clearInterval(groupTimer);
     child?.stdout?.removeAllListeners("data"); child?.stderr?.removeAllListeners("data");
     child?.stdout?.destroy(); child?.stderr?.destroy(); child?.stdin?.destroy();
+    child?.removeAllListeners("exit"); child?.removeAllListeners("close");
+    child?.removeAllListeners("error"); child?.on("error", () => {});
     child?.unref();
     pending = Buffer.alloc(0);
     resolve({ runId, pid: child?.pid || null, code: exitCode, signal: exitSignal, cause: cause || "EXIT", events, invalidLines, stderr: stderr.toString("utf8"), counts: { ...counts }, timedOut: cause === "TIMEOUT", cancelled: cause === "CANCELLED" });

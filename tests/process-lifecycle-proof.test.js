@@ -67,7 +67,9 @@ test("accepts bounded JSONL, explicit env, stdin, stderr, counts, and pid", asyn
   process.env.PROCESS_LIFECYCLE_AMBIENT = "must-not-leak";
   try {
     const seen = [];
+    let child;
     const { promise } = runFixture("allowed", {
+      onSpawn: (value) => { child = value; },
       input: "hello",
       env: { PROCESS_LIFECYCLE_SENTINEL: "explicit" },
       onEvent: (event) => seen.push(event.type)
@@ -87,6 +89,10 @@ test("accepts bounded JSONL, explicit env, stdin, stderr, counts, and pid", asyn
     assert.match(result.stderr, /fixture-stderr/);
     assert.equal(result.invalidLines.length, 0);
     assertPositiveLimitDefaults(result.counts);
+    assert.equal(child.listenerCount("exit"), 0);
+    assert.equal(child.listenerCount("close"), 0);
+    assert.equal(child.stdout.listenerCount("data"), 0);
+    assert.equal(child.stderr.listenerCount("data"), 0);
   } finally {
     delete process.env.PROCESS_LIFECYCLE_AMBIENT;
   }
