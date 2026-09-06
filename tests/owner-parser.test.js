@@ -26,6 +26,11 @@ async function main() {
   assert.equal(load(root).requests.get("interrupted").status, "blocked");
   assert.deepEqual(requests.result({ requestId: "r" }), result);
   assert.throws(() => requests.admit({ ...params, requestId: "retry" }), { code: "MISSION_REQUEST_BLOCKED" });
+  journal.append(root, { type: "channel.registered", channel: { id: "c" } });
+  journal.append(root, { type: "worker.attempt.started", channelId: "c", jobId: "j" });
+  journal.append(root, { type: "worker.attempt.finished", channelId: "c", jobId: "j", code: "CLEANUP_FAILED", receipt: { metadata: { ownedRunSettled: false } } });
+  requests.reconcile();
+  assert.equal(journal.load(root).channels.get("c").workerBlocked.code, "RECONCILIATION_REQUIRED");
   fs.appendFileSync(path.join(root, "events.jsonl"), "{");
   assert.throws(() => requests.result({ requestId: "r" }), { code: "JOURNAL_UNCERTAIN" });
   console.log("OWNER admission, exact results, narrowing and uncertain replay parser PASS (not process proof)");

@@ -49,8 +49,19 @@ function createMissionRequests({ root, controller, owner }) {
     return request;
   }
   function reconcile() {
-    for (const request of load(root).requests.values()) {
+    const state = load(root);
+    for (const request of state.requests.values()) {
       if (request.status === "started") update(request, "blocked", { code: "RECONCILIATION_REQUIRED", externalEffects: "UNKNOWN" });
+    }
+    // Missing terminal channel evidence cannot authorize resume after owner loss.
+    const activeChannels = new Map();
+    for (const event of state.events) {
+      if (event.type === "worker.attempt.started" && event.channelId) activeChannels.set(event.channelId, event.jobId);
+      if (event.type === "worker.attempt.finished" && activeChannels.get(event.channelId) === event.jobId && event.receipt?.metadata?.ownedRunSettled === true) activeChannels.delete(event.channelId);
+    }
+    for (const [channelId, jobId] of activeChannels) {
+      if (!state.channels.get(channelId)?.workerBlocked) journal.append(root, { type: "channel.updated", channelId,
+        patch: { workerBlocked: { code: "RECONCILIATION_REQUIRED", jobId, externalEffects: "UNKNOWN" } } });
     }
   }
   async function runNext() {

@@ -69,6 +69,11 @@ async function main() {
       });
       const missing = client(...runArgs);
       assert.equal((await missing.closed).code, 1); assert.match(missing.output.join(""), /OWNER_UNAVAILABLE/);
+      if (stage === "admitted") {
+        journal.append(root, { type: "channel.registered", channel: { id: "uncertain", cwd: repo, engine: "claude", state: "working" } });
+        journal.append(root, { type: "channel.job.started", channelId: "uncertain", job: { id: "lost", objective: "Never replay an uncertain worker" } });
+        journal.append(root, { type: "worker.attempt.started", channelId: "uncertain", jobId: "lost" });
+      }
       let owner = daemon();
       if (stage === "client-loss") {
         const contender = daemon();
@@ -147,6 +152,7 @@ async function main() {
         if (stage === "before-ready") {
           assert.equal(load(root).requests.size, 0);
         } else if (stage === "admitted") {
+          assert.equal(journal.load(root).channels.get("uncertain").workerBlocked.code, "RECONCILIATION_REQUIRED");
           const m = await until(() => {
             const value = journal.load(root).missions.get("owned");
             return value.worktree && fs.existsSync(path.join(value.worktree, "worker-entered")) && value;
@@ -154,6 +160,8 @@ async function main() {
           fs.writeFileSync(path.join(m.worktree, "worker-release"), "");
           await until(() => load(root).requests.get("one").status === "finished");
           assert.equal(fs.readFileSync(path.join(m.worktree, "worker-entered"), "utf8"), "invocation\n");
+          assert.equal(journal.load(root).channels.get("uncertain").currentJob.id, "lost");
+          assert.equal(journal.load(root).events.filter((e) => e.type === "worker.attempt.started" && e.channelId === "uncertain").length, 1);
         } else {
           assert.equal(load(root).requests.get("one").status, "blocked");
           await assert.rejects(call(root, "mission.run", { requestId: "replay", missionId: "owned" }), { code: "MISSION_REQUEST_BLOCKED" });
@@ -208,5 +216,6 @@ async function main() {
   const output = path.resolve("outputs/M0.2-OWNER");
   fs.mkdirSync(output, { recursive: true });
   fs.writeFileSync(path.join(output, "consumer-evidence.json"), JSON.stringify(evidence, null, 2));
+  console.log("OWNER_EVIDENCE_JSON " + JSON.stringify(evidence));
   console.log("OWNER consumer total", evidence.length, "watchdog interventions 0; active remaining 0");
 }

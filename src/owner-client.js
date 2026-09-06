@@ -2,6 +2,7 @@
 
 const http = require("node:http");
 const path = require("node:path");
+const fs = require("node:fs");
 const ownership = require("./execution-owner");
 
 function exchange(endpoint, method, body) {
@@ -38,5 +39,9 @@ async function call(root, method, params) {
 }
 function assertLocalTest(root) {
   if (ownership.read(root)) ownership.fail("LOCAL_TEST_OWNER_CONFLICT");
+  for (const name of ["owner-acquire", "channel-api.sock"]) {
+    try { fs.lstatSync(path.join(root, "daemon", name)); ownership.fail("LOCAL_TEST_OWNER_CONFLICT"); }
+    catch (e) { if (e.code !== "ENOENT") throw e; }
+  }
 }
 module.exports = { call, exchange, assertLocalTest };
