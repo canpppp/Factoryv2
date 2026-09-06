@@ -3,6 +3,7 @@
 const { spawn } = require("node:child_process");
 const { randomUUID } = require("node:crypto");
 const { createLinuxOwnership } = require("./linux-ownership");
+const LINUX_START_GATE = 'IFS= read -r permit <&5 || exit 125; [ "$permit" = "factory-start-v1" ] || exit 125; exec 5<&-; exec "$@"';
 
 const DEFAULT_LIMITS = Object.freeze({ lineBytes: 1024 * 1024, stdoutBytes: 8 * 1024 * 1024, events: 4096, invalidLines: 32, stderrBytes: 65536, killGraceMs: 500, cleanupMs: 3000 });
 function validateLimits(value = {}) {
@@ -41,7 +42,7 @@ function runJsonlProcess({ command, args = [], cwd, input, timeoutMs = 300000, e
     for (const t of [timer, killTimer, deadlineTimer]) clearTimeout(t);
     clearInterval(groupTimer);
     clearInterval(ownershipTimer);
-    child?.stdio?.[3]?.destroy(); child?.stdio?.[4]?.destroy();
+    child?.stdio?.[3]?.destroy(); child?.stdio?.[4]?.destroy(); child?.stdio?.[5]?.destroy();
     namespaceOwner?.close();
     child?.stdout?.removeAllListeners("data"); child?.stderr?.removeAllListeners("data");
     child?.stdout?.destroy(); child?.stderr?.destroy(); child?.stdin?.destroy();
@@ -62,6 +63,7 @@ function runJsonlProcess({ command, args = [], cwd, input, timeoutMs = 300000, e
   function terminate(reason) {
     if (settled || cause) return false;
     cause = reason;
+    child?.stdio?.[5]?.destroy();
     clearTimeout(timer);
     signalOwned("SIGTERM");
     cleanupTimers();
@@ -82,17 +84,20 @@ function runJsonlProcess({ command, args = [], cwd, input, timeoutMs = 300000, e
   }
   try {
     if (process.platform === "win32") throw new Error("owned process groups unavailable");
-    child = spawn(command, args, { cwd, env: { ...env }, detached: true, stdio: ownership ? ["pipe", "pipe", "pipe", "pipe", "pipe"] : ["pipe", "pipe", "pipe"] });
+    child = spawn(command, args, { cwd, env: { ...env }, detached: true, stdio: ownership ? ["pipe", "pipe", "pipe", "pipe", "pipe", "pipe"] : ["pipe", "pipe", "pipe"] });
     if (ownership) {
       namespaceOwner = createLinuxOwnership(child.pid);
       child.stdio[3].on("data", namespaceOwner.data);
       child.stdio[3].on("end", namespaceOwner.end);
       child.stdio[3].on("error", () => terminate("CLEANUP_FAILED"));
       child.stdio[4].on("error", () => terminate("CLEANUP_FAILED"));
+      child.stdio[5].on("error", () => terminate("CLEANUP_FAILED"));
       ownershipTimer = setInterval(() => {
         if (namespaceOwner.invalid()) return terminate("CLEANUP_FAILED");
         if (namespaceOwner.observe() === "ACTIVE" && !released && !cause) {
-          released = true; child.stdio[4].end("1");
+          // bwrap's block FD treats EOF as release. A separate trusted exec
+          // gate requires this explicit permit, so pre-release owner loss denies.
+          released = true; child.stdio[5].end("factory-start-v1\n"); child.stdio[4].end("1");
         }
         checkCleanup();
       }, 10);
@@ -160,4 +165,4 @@ function classifiedError(message, details = {}) {
   return error;
 }
 
-module.exports = { runJsonlProcess, classifiedError, validateLimits, DEFAULT_LIMITS };
+module.exports = { runJsonlProcess, classifiedError, validateLimits, DEFAULT_LIMITS, LINUX_START_GATE };

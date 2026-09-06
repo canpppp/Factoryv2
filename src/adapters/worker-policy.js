@@ -3,7 +3,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const { createHash } = require("node:crypto");
-const { validateLimits } = require("./process");
+const { validateLimits, LINUX_START_GATE } = require("./process");
 
 const hash = (value) => createHash("sha256").update(value).digest("hex");
 const fail = (message, code = "POLICY_DENIED") => { throw Object.assign(new Error(message), { code }); };
@@ -73,10 +73,12 @@ function compileWorkerPolicy(engine, config, options) {
   if (fs.statSync(stateRoot).mode & 0o077) fail("worker state root must be private (0700)");
   const runtimeReadRoots = (spec.runtimeReadRoots || []).map(canonical);
   if (!synthetic && runtimeReadRoots.length) fail("custom runtime exceptions require adapter validation", "ISOLATION_UNSUPPORTED");
+  const gateExecutable = process.platform === "linux" ? canonical("/bin/sh") : null;
+  const startupGate = gateExecutable ? { version: 1, executable: gateExecutable, sha256: hash(fs.readFileSync(gateExecutable)), scriptSha256: hash(LINUX_START_GATE) } : null;
   const profile = {
     version: 2, ownership: process.platform === "linux" ? "linux-pid-namespace-v1" : "process-group", channelId: options.channelId || null, engine, executable, executableSha256, entrypoint, entrypointSha256, synthetic, cwd, tools, disallowedTools, readRoots, writeRoots,
     ...(options.controllerBinding ? { controllerBinding: JSON.parse(JSON.stringify(options.controllerBinding)) } : {}),
-    stateRoot, runtimeReadRoots, sandbox, timeoutMs, limits,
+    stateRoot, runtimeReadRoots, sandbox, timeoutMs, limits, ...(startupGate ? { startupGate } : {}),
     model: options.model || config.model || null, maxTurns: options.maxTurns || config.maxTurns || 12,
     auth: { mode: spec.auth.mode, source: synthetic ? null : spec.auth.tokenEnv },
     configuration: "private-home-safe-mode-no-mcp-no-settings", environmentKeys: ["HOME", "PATH", "TMPDIR", "LANG", "LC_ALL", "CLAUDE_CONFIG_DIR", "CODEX_HOME", ...(synthetic ? [] : ["CLAUDE_CODE_OAUTH_TOKEN"])]
@@ -90,6 +92,7 @@ function compileWorkerPolicy(engine, config, options) {
 function prepareWorker(profile, args) {
   if (hash(fs.readFileSync(profile.executable)) !== profile.executableSha256) fail("worker executable changed before spawn");
   if (profile.entrypoint && hash(fs.readFileSync(profile.entrypoint)) !== profile.entrypointSha256) fail("worker entrypoint changed before spawn");
+  if (process.platform === "linux" && (!profile.startupGate || hash(fs.readFileSync(profile.startupGate.executable)) !== profile.startupGate.sha256 || hash(LINUX_START_GATE) !== profile.startupGate.scriptSha256)) fail("startup gate changed before spawn");
   for (const root of [...profile.readRoots, ...profile.writeRoots, profile.stateRoot, ...profile.runtimeReadRoots]) {
     if (canonical(root) !== root) fail("worker root changed before spawn");
   }
@@ -133,8 +136,9 @@ function prepareWorker(profile, args) {
   }
   const wrapped = ["--die-with-parent", "--unshare-all", "--new-session", "--info-fd", "3", "--block-fd", "4", "--proc", "/proc", "--dev", "/dev", "--dir", profile.cwd];
   for (const root of reads) wrapped.push("--ro-bind", root, root);
+  wrapped.push("--ro-bind", profile.startupGate.executable, profile.startupGate.executable);
   for (const root of [home, ...profile.writeRoots]) wrapped.push("--bind", root, root);
-  wrapped.push("--chdir", profile.cwd, "--", profile.executable, ...args);
+  wrapped.push("--chdir", profile.cwd, "--", profile.startupGate.executable, "-c", LINUX_START_GATE, "factory-start-gate", profile.executable, ...args);
   return { command: profile.sandbox, args: wrapped, env, redact, ownership: profile.ownership };
 }
 

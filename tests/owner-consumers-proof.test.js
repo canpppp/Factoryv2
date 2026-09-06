@@ -19,7 +19,7 @@ async function main() {
   const { read } = require("../src/execution-owner");
   const { call, exchange } = require("../src/owner-client");
   const { fixtureProfile } = require("./fixtures/isolated-profile");
-  const { identity, same, signal } = require("./fixtures/linux-ownership-host");
+  const { identity, same, signal, inventory } = require("./fixtures/linux-ownership-host");
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   async function until(fn, ms = 5000) {
     const end = Date.now() + ms;
@@ -158,6 +158,8 @@ async function main() {
           assert.equal(load(root).requests.get("one").status, "blocked");
           await assert.rejects(call(root, "mission.run", { requestId: "replay", missionId: "owned" }), { code: "MISSION_REQUEST_BLOCKED" });
           assert.equal(journal.load(root).events.filter((e) => e.type === "owner.request.started").length, 1);
+          const m = journal.load(root).missions.get("owned");
+          assert.equal(fs.existsSync(path.join(m.worktree, "worker-entered")), false, "owner EOF must not execute unpermitted worker");
         }
         signal(replacement.saved, "SIGTERM"); assert.equal((await replacement.closed).code, 0, replacement.output.join(""));
       } else {
@@ -191,6 +193,7 @@ async function main() {
         if (same(proc.saved)?.state !== "Z") signal(proc.saved, "SIGTERM");
       }
       await Promise.all(tracked.filter((p) => p !== watchdog).map((p) => p.closed));
+      await until(() => inventory(token).filter((p) => p.pid !== watchdog.child.pid && p.state !== "Z").length === 0);
       watchdog.child.send("finish"); await watchdog.closed;
       const cleanup = JSON.parse(fs.readFileSync(report));
       assert.deepEqual(cleanup.interventions, []); assert.deepEqual(cleanup.remaining, []);
